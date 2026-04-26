@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oakland Hockey Stats</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero-banner" aria-label="Oakland Beer League Stats">
+        <img
+          class="hero-art"
+          src="assets/oakland-beer-league-banner.png"
+          width="1536"
+          height="1024"
+          alt="Oakland Beer League Stats. From Hockey Champions. Fueled by beer, praying for early ice times."
+        />
+        <nav class="tabs hero-tabs" aria-label="Stats views">
+          <button class="tab hero-tab hero-tab-standings is-active" data-view="standings" type="button" aria-label="Standings"><span>Standings</span></button>
+          <button class="tab hero-tab hero-tab-leaders" data-view="leaders" type="button" aria-label="Leaders"><span>Leaders</span></button>
+          <button class="tab hero-tab hero-tab-schedule" data-view="schedule" type="button" aria-label="Schedule"><span>Schedule</span></button>
+          <button class="tab hero-tab hero-tab-teams" data-view="teams" type="button" aria-label="Teams"><span>Teams</span></button>
+          <button class="tab hero-tab hero-tab-players" data-view="players" type="button" aria-label="Players"><span>Players</span></button>
+        </nav>
+      </header>
+
+      <section class="utility-bar" aria-label="Stats controls">
+        <div>
+          <p class="eyebrow">Sharks Ice Oakland</p>
+        </div>
+        <div class="controls">
+          <label for="seasonSelect">Season</label>
+          <select id="seasonSelect"></select>
+          <button id="refreshButton" class="icon-button" type="button" title="Refresh stats" aria-label="Refresh stats">Refresh</button>
+        </div>
+      </section>
+
+      <main>
+        <section id="status" class="status" hidden></section>
+
+        <section id="standingsView" class="view is-active">
+          <div class="section-head">
+            <h2>Standings</h2>
+          </div>
+          <div id="standingsGrid" class="division-grid"></div>
+        </section>
+
+        <section id="leadersView" class="view">
+          <div class="section-head">
+            <h2>League Leaders</h2>
+            <div class="segmented compact" id="leaderMode">
+              <button class="is-active" data-leader-mode="players" type="button">Skaters</button>
+              <button data-leader-mode="goalies" type="button">Goalies</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <input id="leaderSearch" type="search" placeholder="Search players or teams" />
+            <select id="leaderSort"></select>
+          </div>
+          <div id="leaderTable" class="table-wrap"></div>
+        </section>
+
+        <section id="scheduleView" class="view">
+          <div class="section-head">
+            <h2>Schedule</h2>
+            <div class="segmented compact" id="scheduleMode">
+              <button class="is-active" data-schedule-mode="all" type="button">All</button>
+              <button data-schedule-mode="final" type="button">Finals</button>
+              <button data-schedule-mode="upcoming" type="button">Upcoming</button>
+            </div>
+          </div>
+          <div class="toolbar schedule-filters">
+            <label>
+              <span>Division</span>
+              <select id="scheduleDivisionSelect">
+                <option>Loading divisions...</option>
+              </select>
+            </label>
+            <label>
+              <span>Team</span>
+              <select id="scheduleTeamSelect">
+                <option>Loading teams...</option>
+              </select>
+            </label>
+          </div>
+          <div id="scheduleList" class="game-list"></div>
+        </section>
+
+        <section id="teamsView" class="view">
+          <div class="section-head">
+            <h2>Teams</h2>
+          </div>
+          <div class="team-picker">
+            <label>
+              <span>Division</span>
+              <select id="teamDivisionSelect"></select>
+            </label>
+            <label>
+              <span>Team</span>
+              <select id="teamSelect"></select>
+            </label>
+            <button id="openSelectedTeam" type="button">Open Team</button>
+          </div>
+          <div id="teamsGrid" class="team-grid"></div>
+          <div id="teamDetail" class="detail-panel" hidden></div>
+        </section>
+
+        <section id="playersView" class="view">
+          <div class="section-head">
+            <h2>Player Profiles</h2>
+          </div>
+          <section id="playerProfile" class="player-profile" hidden></section>
+          <div class="toolbar player-filters">
+            <label>
+              <span>Division</span>
+              <select id="playerDivisionSelect">
+                <option>Loading divisions...</option>
+              </select>
+            </label>
+            <label>
+              <span>Team</span>
+              <select id="playerTeamSelect">
+                <option>Loading teams...</option>
+              </select>
+            </label>
+            <label>
+              <span>Player</span>
+              <select id="playerNameSelect">
+                <option>Loading players...</option>
+              </select>
+            </label>
+          </div>
+          <p id="playerGridSummary" class="grid-summary"></p>
+          <div id="playerGrid" class="profile-sections"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="playerDrawer" class="player-drawer" hidden aria-hidden="true">
+      <button id="playerDrawerBackdrop" class="player-drawer-backdrop" type="button" aria-label="Close player profile"></button>
+      <aside class="player-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="playerDrawerTitle">
+        <div class="drawer-bar">
+          <p class="eyebrow">Player Stats</p>
+          <button id="playerDrawerClose" class="drawer-close" type="button" aria-label="Close player profile">Close</button>
+        </div>
+        <div id="playerDrawerBody" class="player-drawer-body"></div>
+      </aside>
+    </div>
+
+    <script src="app.js?v=static-deploy-v1" defer></script>
+  </body>
+</html>
