@@ -5,5 +5,15 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
-  }
+  },
+  "routes": [
+    {
+      "pattern": "obl-stats.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.obl-stats.com",
+      "custom_domain": true
+    }
+  ]
 }
