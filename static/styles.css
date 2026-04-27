@@ -30,7 +30,7 @@ html {
 body {
   margin: 0;
   font-family: "Avenir Next", "Neue Haas Grotesk Text", "Helvetica Neue", sans-serif;
-  overflow-x: hidden;
+  overflow-x: auto;
 }
 
 body.drawer-open {
@@ -57,6 +57,7 @@ a:focus-visible {
 
 .app-shell {
   margin: 0 auto;
+  min-width: 0;
   padding: 28px 0 48px;
   width: min(1180px, calc(100% - 48px));
 }
@@ -200,6 +201,8 @@ input::placeholder {
   display: block;
   inset: 0;
   margin: 0;
+  max-width: 100%;
+  min-width: 0;
   overflow: visible;
   padding: 0;
   pointer-events: none;
@@ -301,6 +304,7 @@ input::placeholder {
 }
 
 main {
+  min-width: 0;
   min-height: 620px;
 }
 
@@ -343,6 +347,7 @@ main {
   grid-row: 1;
   height: calc(100% - 24px);
   margin: 12px;
+  min-width: 0;
   opacity: 0;
   overflow: auto;
   padding: 24px;
@@ -443,6 +448,7 @@ main {
 
 .view.is-active {
   display: block;
+  min-width: 0;
 }
 
 .section-head {
@@ -452,6 +458,7 @@ main {
   gap: 22px;
   justify-content: space-between;
   margin-bottom: 22px;
+  min-width: 0;
   padding-bottom: 18px;
 }
 
@@ -469,12 +476,20 @@ main {
   display: flex;
   gap: 10px;
   margin-bottom: 18px;
+  min-width: 0;
 }
 
 .toolbar input,
 .toolbar select {
   flex: 1;
   min-width: 180px;
+}
+
+.toolbar > *,
+.team-picker > *,
+.player-filters > *,
+.profile-scope-controls > * {
+  min-width: 0;
 }
 
 .schedule-filters label,
@@ -576,6 +591,7 @@ main {
 .detail-panel {
   background: transparent;
   border-top: 1px solid var(--line-strong);
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -719,7 +735,11 @@ main {
 .table-wrap {
   background: transparent;
   -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  min-width: 0;
+  overscroll-behavior-x: contain;
   overflow-x: auto;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 #leaderTable,
