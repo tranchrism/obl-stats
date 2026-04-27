@@ -765,25 +765,6 @@ main {
   background-attachment: local, local, scroll, scroll;
 }
 
-.table-section-head {
-  align-items: end;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.table-section-head h3 {
-  margin-bottom: 0;
-}
-
-.table-section-head span {
-  color: var(--muted);
-  display: none;
-  font-size: 0.7rem;
-  font-weight: 780;
-  text-transform: uppercase;
-}
-
 table {
   border-collapse: collapse;
   min-width: 760px;
@@ -1247,10 +1228,6 @@ th.number .table-sort {
     padding-right: calc(50vw - 50%);
     scroll-padding-left: calc(50vw - 50%);
     width: auto;
-  }
-
-  .table-section-head span {
-    display: inline;
   }
 
   .game-row {
