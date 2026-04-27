@@ -33,7 +33,7 @@ jobs:
           python-version: "3.12"
 
       - name: Export static site
-        run: python export_static.py --out dist
+        run: python export_static.py --out dist --current-only --skip-playoffs
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

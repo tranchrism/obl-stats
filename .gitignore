@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 dist/
 dist-smoke/
+dist-smoke-current/

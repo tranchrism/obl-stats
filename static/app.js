@@ -798,6 +798,7 @@ function renderPlayerProfileInto(panel, profile, splitSelectId, titleId = "") {
   const divisionSelectId = `${splitSelectId}Division`;
   const teamSelectId = `${splitSelectId}Team`;
   const titleAttribute = titleId ? ` id="${titleId}"` : "";
+  const availableSplits = profile.available_splits?.length ? profile.available_splits : ["regular", "playoffs"];
   panel.innerHTML = `
     <header class="player-hero">
       <div>
@@ -808,8 +809,7 @@ function renderPlayerProfileInto(panel, profile, splitSelectId, titleId = "") {
       <label class="split-control">
         <span>Split</span>
         <select id="${splitSelectId}">
-          <option value="regular" ${profile.season_type === "regular" ? "selected" : ""}>Regular Season</option>
-          <option value="playoffs" ${profile.season_type === "playoffs" ? "selected" : ""}>Playoffs</option>
+          ${availableSplits.map((split) => `<option value="${escapeAttr(split)}" ${profile.season_type === split ? "selected" : ""}>${split === "playoffs" ? "Playoffs" : "Regular Season"}</option>`).join("")}
         </select>
       </label>
     </header>
