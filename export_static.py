@@ -71,6 +71,28 @@ def write_profile_files(players_dir: Path, profiles: dict[str, dict[str, Any]]) 
     return count
 
 
+def team_matches_game(team: dict[str, Any], game: dict[str, Any]) -> bool:
+    team_id = str(team.get("id", ""))
+    team_name = str(team.get("name", ""))
+    return (
+        (team_id and team_id in {str(game.get("away_team_id", "")), str(game.get("home_team_id", ""))})
+        or (team_name and team_name in {str(game.get("away_team", "")), str(game.get("home_team", ""))})
+    )
+
+
+def new_team_payload(season_id: str, team: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "season": season_id,
+        "team_id": str(team.get("id", "")),
+        "team_name": team.get("name", ""),
+        "games": [],
+        "players": [],
+        "goalies": [],
+        "team_stats": [],
+        "special_teams": [],
+    }
+
+
 def export_site(out_dir: Path, current_only: bool = False, include_playoffs: bool = True, include_profiles: bool = True) -> dict[str, Any]:
     copy_static_assets(out_dir)
 
@@ -88,7 +110,8 @@ def export_site(out_dir: Path, current_only: bool = False, include_playoffs: boo
         requested_season_ids.extend(season["id"] for season in client.seasons() if season["id"] != "0")
 
     all_names: set[str] = set()
-    exported_team_keys: set[tuple[str, str]] = set()
+    team_payloads: dict[tuple[str, str], dict[str, Any]] = {}
+    team_context: dict[tuple[str, str], dict[str, Any]] = {}
     exported_division_keys: set[tuple[str, str, str, str]] = set()
     division_context: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     exported_schedule_ids: set[str] = set()
@@ -127,10 +150,22 @@ def export_site(out_dir: Path, current_only: bool = False, include_playoffs: boo
                 }
             for team in division.get("teams", []):
                 if team.get("id"):
-                    exported_team_keys.add((division_season, str(team["id"])))
+                    team_key = (division_season, str(team["id"]))
+                    team_context[team_key] = team
+                    team_payloads.setdefault(team_key, new_team_payload(division_season, team))
 
+    schedules: dict[str, dict[str, Any]] = {}
     for season_id in exported_schedule_ids:
-        write_json(schedule_dir / f"{season_id}.json", client.schedule(season_id))
+        schedule = client.schedule(season_id)
+        schedules[season_id] = schedule
+        write_json(schedule_dir / f"{season_id}.json", schedule)
+    for (season_id, team_id), payload in team_payloads.items():
+        team = team_context.get((season_id, team_id), {})
+        payload["games"] = [
+            game
+            for game in schedules.get(season_id, {}).get("games", [])
+            if team_matches_game(team, game)
+        ]
 
     profiles: dict[str, dict[str, Any]] = {}
     for season_id, level, conf, stat_class in sorted(exported_division_keys):
@@ -138,43 +173,54 @@ def export_site(out_dir: Path, current_only: bool = False, include_playoffs: boo
         write_json(division_stats_dir / f"{season_id}-{level}-{conf}-{stat_class}.json", stats)
         all_names.update(str(row.get("name", "")) for row in stats.get("players", []) if row.get("name"))
         all_names.update(str(row.get("name", "")) for row in stats.get("goalies", []) if row.get("name"))
-        if include_profiles:
-            context = division_context.get((season_id, level, conf, stat_class), {})
-            team_by_name = {str(team.get("name", "")): team for team in context.get("teams", [])}
-            split = "playoffs" if stat_class == "2" else "regular"
-            for player in stats.get("players", []):
-                team = team_by_name.get(str(player.get("team", "")), {})
+        context = division_context.get((season_id, level, conf, stat_class), {})
+        team_by_name = {str(team.get("name", "")): team for team in context.get("teams", [])}
+        split = "playoffs" if stat_class == "2" else "regular"
+        for player in stats.get("players", []):
+            team = team_by_name.get(str(player.get("team", "")), {})
+            team_id = str(team.get("id", ""))
+            player_row = {
+                **player,
+                "season": context.get("season_name", season_id),
+                "season_id": context.get("season", season_id),
+                "division": context.get("division", ""),
+                "division_id": context.get("division_id", ""),
+                "team_id": team_id,
+            }
+            if include_profiles:
                 add_profile_row(
                     profiles,
-                    {
-                        **player,
-                        "season": context.get("season_name", season_id),
-                        "season_id": context.get("season", season_id),
-                        "division": context.get("division", ""),
-                        "division_id": context.get("division_id", ""),
-                        "team_id": team.get("id", ""),
-                    },
+                    player_row,
                     "skater",
                     split,
                 )
-            for goalie in stats.get("goalies", []):
-                team = team_by_name.get(str(goalie.get("team", "")), {})
+            if stat_class == "1" and team_id:
+                team_payloads.setdefault((season_id, team_id), new_team_payload(season_id, team)).setdefault("players", []).append(player_row)
+        for goalie in stats.get("goalies", []):
+            team = team_by_name.get(str(goalie.get("team", "")), {})
+            team_id = str(team.get("id", ""))
+            goalie_row = {
+                **goalie,
+                "season": context.get("season_name", season_id),
+                "season_id": context.get("season", season_id),
+                "division": context.get("division", ""),
+                "division_id": context.get("division_id", ""),
+                "team_id": team_id,
+            }
+            if include_profiles:
                 add_profile_row(
                     profiles,
-                    {
-                        **goalie,
-                        "season": context.get("season_name", season_id),
-                        "season_id": context.get("season", season_id),
-                        "division": context.get("division", ""),
-                        "division_id": context.get("division_id", ""),
-                        "team_id": team.get("id", ""),
-                    },
+                    goalie_row,
                     "goalie",
                     split,
                 )
+            if stat_class == "1" and team_id:
+                team_payloads.setdefault((season_id, team_id), new_team_payload(season_id, team)).setdefault("goalies", []).append(goalie_row)
 
-    for season_id, team_id in sorted(exported_team_keys):
-        write_json(teams_dir / season_id / f"{team_id}.json", client.team(season_id, team_id))
+    for season_id, team_id in sorted(team_payloads):
+        payload = team_payloads[(season_id, team_id)]
+        payload["players"] = server.remove_goalie_overlap_from_skaters(payload.get("players", []), payload.get("goalies", []))
+        write_json(teams_dir / season_id / f"{team_id}.json", payload)
 
     profile_files = write_profile_files(players_dir, profiles) if include_profiles else 0
 
@@ -186,7 +232,7 @@ def export_site(out_dir: Path, current_only: bool = False, include_playoffs: boo
         "standings_files": len(standings_by_request),
         "division_stat_files": len(exported_division_keys),
         "schedule_files": len(exported_schedule_ids),
-        "team_files": len(exported_team_keys),
+        "team_files": len(team_payloads),
         "player_profile_names": len(all_names),
         "player_profile_files": profile_files,
         "include_playoffs": include_playoffs,

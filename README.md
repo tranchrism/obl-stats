@@ -50,7 +50,7 @@ The included GitHub Actions workflow deploys `dist/` to GitHub Pages:
 - on pushes to `main`
 - manually via `workflow_dispatch`
 - nightly at `10:30 UTC`, roughly middle-of-the-night Pacific time
-- current-season data first, so daily deploys stay quick and reliable
+- regular-season historical data from 2017 onward, with player profiles generated from exported division stats
 
 For local backend development, keep using `python3 server.py`. For GitHub Pages, the frontend automatically reads from `data/*.json` instead of `/api/*`.
 
