@@ -758,11 +758,17 @@ function renderTeamDetail() {
         <div class="metric"><span class="label">Goalies</span><span class="value">${detail.goalies.length}</span></div>
       </div>
       <section>
-        <h3>Skaters</h3>
+        <div class="table-section-head">
+          <h3>Skaters</h3>
+          <span>Swipe for more stats</span>
+        </div>
         <div class="table-wrap">${renderTable(detail.players || [], [["name", "Player"], ["number", "#"], ["gp", "GP"], ["goals", "G"], ["assists", "A"], ["pims", "PIM"], ["shots", "Shots"], ["points", "Pts"]])}</div>
       </section>
       <section>
-        <h3>Goalies</h3>
+        <div class="table-section-head">
+          <h3>Goalies</h3>
+          <span>Swipe for more stats</span>
+        </div>
         <div class="table-wrap">${renderTable(detail.goalies || [], [["name", "Goalie"], ["number", "#"], ["gp", "GP"], ["shots", "Shots"], ["goals_against", "GA"], ["goals_against_average", "GAA"], ["save_pct", "Save %"], ["wins", "W"]])}</div>
       </section>
       <section>
