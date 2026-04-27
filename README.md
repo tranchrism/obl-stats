@@ -52,6 +52,17 @@ The included GitHub Actions workflow deploys `dist/` to GitHub Pages:
 - nightly at `10:30 UTC`, roughly middle-of-the-night Pacific time
 - regular-season historical data from 2017 onward, with player profiles generated from exported division stats
 
+## Cloudflare Hosting
+
+The repo also includes `wrangler.jsonc` for Cloudflare Workers static assets. The existing GitHub Actions workflow can deploy the same generated `dist/` output to Cloudflare after the GitHub Pages deploy.
+
+To enable Cloudflare deployment from GitHub Actions, add these repository secrets in GitHub:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
+
+The Cloudflare API token should allow Workers Scripts edit/deploy access for the target account. Once those secrets exist, pushes to `main`, manual workflow runs, and the nightly refresh will deploy to both GitHub Pages and Cloudflare.
+
 For local backend development, keep using `python3 server.py`. For GitHub Pages, the frontend automatically reads from `data/*.json` instead of `/api/*`.
 
 ## Local API
