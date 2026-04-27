@@ -2,9 +2,13 @@ const DEFAULT_HISTORY_START_YEAR = 2017;
 const PLAYER_LANDING_LIMIT = 10;
 const LOCAL_API_HOSTS = new Set(["", "127.0.0.1", "localhost"]);
 const USE_STATIC_DATA = new URLSearchParams(window.location.search).get("data") === "static" || !LOCAL_API_HOSTS.has(window.location.hostname);
+const ROUTE_VIEWS = new Set(["standings", "leaders", "schedule", "teams", "players"]);
 
 const state = {
+  view: "standings",
   season: "0",
+  requestedSeason: "0",
+  routeParams: {},
   historyStartYear: DEFAULT_HISTORY_START_YEAR,
   standings: null,
   divisionStats: new Map(),
@@ -28,6 +32,7 @@ const state = {
 };
 
 let activePlayerRequest = 0;
+let isApplyingRoute = false;
 const playerProfileCache = new Map();
 const playerProfilePrefetches = new Set();
 
@@ -89,6 +94,36 @@ function slugify(value) {
     .replace(/^-+|-+$/g, "") || "unknown";
 }
 
+function seasonSlug(season) {
+  return season?.id === "0" || season?.current ? "current" : slugify(season?.name || season?.id || "current");
+}
+
+function compactSlug(value) {
+  return slugify(value).replaceAll("-", "");
+}
+
+function slugMatches(value, slug) {
+  return slugify(value) === slugify(slug) || compactSlug(value) === compactSlug(slug);
+}
+
+function seasonSlugMatches(season, slug) {
+  const base = seasonSlug(season);
+  const shortYear = base.replace(/20(\d{2})/g, "$1");
+  return [base, shortYear].some((candidate) => slugMatches(candidate, slug));
+}
+
+function divisionSlug(division) {
+  return slugify(division?.name || division?.id || "");
+}
+
+function teamSlug(teamOrName) {
+  return slugify(typeof teamOrName === "string" ? teamOrName : teamOrName?.name || teamOrName?.id || "");
+}
+
+function profileSlug(value) {
+  return slugify(value).replace(/^(skater|goalie)-/, "");
+}
+
 function showStatus(message, isError = false) {
   const status = $("#status");
   status.hidden = !message;
@@ -117,9 +152,168 @@ function escapeAttr(value) {
     .replaceAll(">", "&gt;");
 }
 
-function switchView(viewName) {
+function routeValue(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function routeViewFromParams(params) {
+  const view = params.get("view");
+  if (ROUTE_VIEWS.has(view)) return view;
+  if (params.has("name")) return "players";
+  if (params.has("team")) return "teams";
+  if (params.has("leader") || params.has("sort")) return "leaders";
+  if (params.has("mode")) return "schedule";
+  return "standings";
+}
+
+function applyRouteFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  state.view = routeViewFromParams(params);
+  state.routeParams = {
+    season: params.get("season") || "current",
+    division: params.get("division") || "",
+    team: params.get("team") || "",
+    scheduleTeam: params.get("scheduleTeam") || "",
+    name: params.get("name") || "",
+    sort: params.get("sort") || "",
+  };
+  state.leaderMode = routeValue(params.get("leader"), ["players", "goalies"], "players");
+  state.leaderSortDirection = routeValue(params.get("dir"), ["asc", "desc"], "desc");
+  state.scheduleMode = routeValue(params.get("mode"), ["all", "final", "upcoming"], "all");
+}
+
+async function resolveRouteSeason() {
+  const requested = state.routeParams.season || "current";
+  if (!requested || requested === "current" || requested === "0") {
+    state.season = "0";
+    state.requestedSeason = "0";
+    return;
+  }
+  if (/^\d+$/.test(requested)) {
+    state.season = requested;
+    state.requestedSeason = requested;
+    return;
+  }
+  const current = await api("/api/standings?season=0");
+  const match = (current.seasons || []).find((season) => seasonSlugMatches(season, requested));
+  state.season = match?.id || "0";
+  state.requestedSeason = state.season;
+}
+
+function resolveRouteControls() {
+  const route = state.routeParams || {};
+  if (route.sort && $("#leaderSort")) {
+    $("#leaderSort").value = route.sort;
+  }
+  if (state.view === "leaders") {
+    renderLeaders();
+    return;
+  }
+  const divisions = state.standings?.divisions || [];
+  const routeDivision = route.division ? divisions.find((division) => slugMatches(divisionSlug(division), route.division) || division.id === route.division) : null;
+  if (state.view === "schedule") {
+    const scheduleDivision = route.division
+      ? Array.from(new Set(state.schedule.map((game) => game.level).filter(Boolean))).find((division) => slugMatches(division, route.division) || division === route.division)
+      : null;
+    state.scheduleDivisionFilter = scheduleDivision || "all";
+    const scheduleTeam = route.scheduleTeam || route.team;
+    state.scheduleTeamFilter = scheduleTeam
+      ? scheduleTeamsForDivision(state.scheduleDivisionFilter).find((team) => slugMatches(team, scheduleTeam) || team === scheduleTeam) || "all"
+      : "all";
+    renderScheduleFilters();
+    renderSchedule();
+    return;
+  }
+  if (state.view === "teams") {
+    const teams = routeDivision ? routeDivision.teams : state.teams;
+    const routeTeam = route.team ? teams.find((team) => slugMatches(teamSlug(team), route.team) || team.id === route.team) : null;
+    const routeTeamDivision = routeTeam ? divisions.find((division) => division.teams.some((team) => team.id === routeTeam.id)) : null;
+    state.teamDivisionFilter = routeDivision?.id || routeTeamDivision?.id || state.teamDivisionFilter || divisions[0]?.id || "all";
+    state.teamPickerTeam = routeTeam?.id || state.teamPickerTeam || teams[0]?.id || "";
+    renderTeams();
+    if (routeTeam) openTeam(routeTeam.id, { silent: true, scroll: false, updateRoute: false });
+    return;
+  }
+  if (state.view === "players") {
+    state.playerDivisionFilter = routeDivision?.id || "all";
+    const teams = playerTeamsForDivision(state.playerDivisionFilter);
+    const routeTeam = route.team ? teams.find((team) => slugMatches(teamSlug(team), route.team) || team.id === route.team) : null;
+    state.playerTeamFilter = routeTeam?.id || "all";
+    renderPlayerFilters();
+    if (route.name) {
+      const routeName = playerOptionsForFilters().find((player) => slugMatches(profileSlug(player.option_value), route.name) || player.option_value === route.name);
+      state.playerNameFilter = routeName?.option_value || "all";
+    }
+    renderPlayerFilters();
+    renderPlayers();
+  }
+}
+
+function currentSeasonParam() {
+  const seasons = state.standings?.seasons || [];
+  const selected = seasons.find((season) => season.id === state.requestedSeason || (state.requestedSeason === "0" && season.current));
+  return seasonSlug(selected || { id: state.season, name: state.season });
+}
+
+function currentRouteUrl() {
+  const params = new URLSearchParams();
+  const existing = new URLSearchParams(window.location.search);
+  if (existing.get("data") === "static") params.set("data", "static");
+  params.set("view", state.view);
+  if (currentSeasonParam() !== "current") params.set("season", currentSeasonParam());
+
+  if (state.view === "leaders") {
+    if (state.leaderMode !== "players") params.set("leader", state.leaderMode);
+    const sort = $("#leaderSort")?.value;
+    if (sort) params.set("sort", sort);
+    if (state.leaderSortDirection !== "desc") params.set("dir", state.leaderSortDirection);
+  }
+  if (state.view === "schedule") {
+    if (state.scheduleMode !== "all") params.set("mode", state.scheduleMode);
+    if (state.scheduleDivisionFilter !== "all") params.set("division", slugify(state.scheduleDivisionFilter));
+    if (state.scheduleTeamFilter !== "all") params.set("team", teamSlug(state.scheduleTeamFilter));
+  }
+  if (state.view === "teams") {
+    const division = (state.standings?.divisions || []).find((entry) => entry.id === state.teamDivisionFilter);
+    const team = state.teams.find((entry) => entry.id === state.teamPickerTeam);
+    if (division) params.set("division", divisionSlug(division));
+    if (team) params.set("team", teamSlug(team));
+  }
+  if (state.view === "players") {
+    const division = (state.standings?.divisions || []).find((entry) => entry.id === state.playerDivisionFilter);
+    const team = state.teams.find((entry) => entry.id === state.playerTeamFilter);
+    if (division) params.set("division", divisionSlug(division));
+    if (team) params.set("team", teamSlug(team));
+    if (state.playerNameFilter !== "all") params.set("name", profileSlug(state.playerNameFilter));
+  }
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ""}`;
+}
+
+function updateRoute({ replace = false } = {}) {
+  if (isApplyingRoute) return;
+  const url = currentRouteUrl();
+  if (url === `${window.location.pathname}${window.location.search}`) return;
+  window.history[replace ? "replaceState" : "pushState"]({ view: state.view }, "", url);
+}
+
+function updateTitle() {
+  const labels = {
+    standings: "Standings",
+    leaders: "League Leaders",
+    schedule: "Schedule",
+    teams: "Teams",
+    players: "Players",
+  };
+  document.title = `${labels[state.view] || "Stats"} | Oakland Beer League Stats`;
+}
+
+function switchView(viewName, options = {}) {
+  state.view = ROUTE_VIEWS.has(viewName) ? viewName : "standings";
   $$(".tab").forEach((entry) => entry.classList.toggle("is-active", entry.dataset.view === viewName));
-  $$(".view").forEach((view) => view.classList.toggle("is-active", view.id === `${viewName}View`));
+  $$(".view").forEach((view) => view.classList.toggle("is-active", view.id === `${state.view}View`));
+  updateTitle();
+  if (options.updateRoute !== false) updateRoute();
 }
 
 function allPlayers() {
@@ -133,9 +327,11 @@ function allGoalies() {
 async function loadApp(force = false) {
   try {
     showStatus("Loading Oakland stats...");
-    const standings = await api(`/api/standings?season=${encodeURIComponent(state.season)}${force ? `&t=${Date.now()}` : ""}`);
+    const requestedSeason = state.requestedSeason || state.season || "0";
+    const standings = await api(`/api/standings?season=${encodeURIComponent(requestedSeason)}${force ? `&t=${Date.now()}` : ""}`);
     state.standings = standings;
-    state.season = standings.season || state.season;
+    state.requestedSeason = standings.requested_season || requestedSeason;
+    state.season = standings.season || requestedSeason;
     state.historyStartYear = standings.history_start_year || DEFAULT_HISTORY_START_YEAR;
     state.teams = standings.divisions.flatMap((division) => division.teams);
     if (!state.teamDivisionFilter) {
@@ -153,7 +349,10 @@ async function loadApp(force = false) {
     renderSchedule();
     renderPlayerFilters();
     renderPlayers();
+    switchView(state.view, { updateRoute: false });
+    resolveRouteControls();
     prewarmPlayerHistory();
+    updateRoute({ replace: true });
     showStatus("");
   } catch (error) {
     showStatus(error.message, true);
@@ -163,7 +362,7 @@ async function loadApp(force = false) {
 function populateSeasons(seasons) {
   const select = $("#seasonSelect");
   select.innerHTML = seasons
-    .map((season) => `<option value="${season.id}" ${season.id === state.season || (state.season === "0" && season.current) ? "selected" : ""}>${season.name}</option>`)
+    .map((season) => `<option value="${season.id}" ${season.id === state.requestedSeason || (state.requestedSeason === "0" && season.current) ? "selected" : ""}>${season.name}</option>`)
     .join("");
 }
 
@@ -530,6 +729,7 @@ async function openTeam(teamId, options = {}) {
     state.selectedTeam = { ...team, detail };
     renderTeamDetail();
     if (!options.silent) showStatus("");
+    if (options.updateRoute !== false) updateRoute();
     if (options.scroll !== false) $("#teamDetail").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
     showStatus(error.message, true);
@@ -1079,6 +1279,8 @@ function renderGoalieSeasonTable(rows, career) {
 function bindEvents() {
   $("#seasonSelect").addEventListener("change", (event) => {
     state.season = event.target.value;
+    state.requestedSeason = event.target.value;
+    state.routeParams = {};
     state.divisionStats.clear();
     state.scheduleDivisionFilter = "all";
     state.scheduleTeamFilter = "all";
@@ -1118,6 +1320,7 @@ function bindEvents() {
       state.leaderSortDirection = "desc";
       $$("#leaderMode button").forEach((button) => button.classList.toggle("is-active", button === leaderMode));
       renderLeaders();
+      updateRoute();
       return;
     }
 
@@ -1132,6 +1335,7 @@ function bindEvents() {
       }
       select.value = sort;
       renderLeaders();
+      updateRoute();
       return;
     }
 
@@ -1140,13 +1344,14 @@ function bindEvents() {
       state.scheduleMode = scheduleMode.dataset.scheduleMode;
       $$("#scheduleMode button").forEach((button) => button.classList.toggle("is-active", button === scheduleMode));
       renderSchedule();
+      updateRoute();
       return;
     }
 
     const teamButton = event.target.closest("[data-team], [data-load-team]");
     if (teamButton) {
       const teamId = teamButton.dataset.team || teamButton.dataset.loadTeam;
-      switchView("teams");
+      switchView("teams", { updateRoute: false });
       openTeam(teamId);
       return;
     }
@@ -1209,28 +1414,33 @@ function bindEvents() {
     state.selectedTeam = null;
     $("#teamDetail").hidden = true;
     renderTeams();
+    updateRoute();
   });
   $("#teamSelect").addEventListener("change", (event) => {
     state.teamPickerTeam = event.target.value;
     state.selectedTeam = null;
     $("#teamDetail").hidden = true;
     renderTeams();
+    updateRoute();
   });
   $("#openSelectedTeam").addEventListener("click", () => openTeam(state.teamPickerTeam));
   $("#leaderSearch").addEventListener("input", renderLeaders);
   $("#leaderSort").addEventListener("change", (event) => {
     state.leaderSortDirection = defaultLeaderSortDirection(event.target.value);
     renderLeaders();
+    updateRoute();
   });
   $("#scheduleDivisionSelect").addEventListener("change", (event) => {
     state.scheduleDivisionFilter = event.target.value;
     state.scheduleTeamFilter = "all";
     renderScheduleFilters();
     renderSchedule();
+    updateRoute();
   });
   $("#scheduleTeamSelect").addEventListener("change", (event) => {
     state.scheduleTeamFilter = event.target.value;
     renderSchedule();
+    updateRoute();
   });
   $("#playerDivisionSelect").addEventListener("change", (event) => {
     state.playerDivisionFilter = event.target.value;
@@ -1238,18 +1448,43 @@ function bindEvents() {
     state.playerNameFilter = "all";
     renderPlayerFilters();
     renderPlayers();
+    updateRoute();
   });
   $("#playerTeamSelect").addEventListener("change", (event) => {
     state.playerTeamFilter = event.target.value;
     state.playerNameFilter = "all";
     renderPlayerFilters();
     renderPlayers();
+    updateRoute();
   });
   $("#playerNameSelect").addEventListener("change", (event) => {
     state.playerNameFilter = event.target.value;
     renderPlayers();
+    updateRoute();
   });
 }
 
-bindEvents();
-loadApp();
+window.addEventListener("popstate", async () => {
+  isApplyingRoute = true;
+  try {
+    applyRouteFromUrl();
+    await resolveRouteSeason();
+    state.divisionStats.clear();
+    state.selectedTeam = null;
+    state.selectedPlayer = null;
+    $("#teamDetail").hidden = true;
+    closePlayerDrawer({ immediate: true });
+    await loadApp();
+  } finally {
+    isApplyingRoute = false;
+  }
+});
+
+async function initApp() {
+  applyRouteFromUrl();
+  await resolveRouteSeason();
+  bindEvents();
+  await loadApp();
+}
+
+initApp();
