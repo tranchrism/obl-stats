@@ -120,6 +120,13 @@ def export_game_centers(
         for game in schedule.get("games", []):
             if game.get("final") and game.get("game_id"):
                 final_games.append((season_id, game))
+    final_games.sort(
+        key=lambda item: (
+            int(item[0]) if str(item[0]).isdigit() else 0,
+            int(item[1].get("game_id", 0)) if str(item[1].get("game_id", "")).isdigit() else 0,
+        ),
+        reverse=True,
+    )
 
     for season_id, game in final_games:
         game_id = str(game.get("game_id", ""))
