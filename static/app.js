@@ -20,6 +20,10 @@ const state = {
   scheduleDivisionFilter: "all",
   scheduleTeamFilter: "all",
   selectedTeam: null,
+  teamSkaterSort: "points",
+  teamSkaterSortDirection: "desc",
+  teamGoalieSort: "save_pct",
+  teamGoalieSortDirection: "desc",
   teamDivisionFilter: null,
   teamPickerTeam: "",
   playerDivisionFilter: "all",
@@ -522,6 +526,10 @@ function defaultLeaderSortDirection(sort) {
   return ["name", "team", "division"].includes(sort) ? "asc" : "desc";
 }
 
+function defaultTeamSortDirection(sort) {
+  return ["name", "number"].includes(sort) ? "asc" : "desc";
+}
+
 function compareLeaderRows(a, b, sort, mode, divisionRanks, direction = "desc") {
   const primaryStat = mode === "players" ? "points" : "save_pct";
   const directionMultiplier = direction === "asc" ? 1 : -1;
@@ -567,6 +575,17 @@ function compareTextAsc(a, b) {
   return String(a || "").localeCompare(String(b || ""), undefined, { sensitivity: "base", numeric: true });
 }
 
+function sortTeamRows(rows, sort, direction) {
+  return [...rows].sort((a, b) => {
+    const textSort = ["name", "number"].includes(sort);
+    const primary = textSort ? compareTextAsc(a[sort], b[sort]) : compareNumeric(a, b, sort, direction);
+    if (textSort) {
+      return (direction === "asc" ? primary : -primary) || compareNumeric(a, b, "points", "desc") || compareTextAsc(a.name, b.name);
+    }
+    return primary || compareNumeric(a, b, "points", "desc") || compareTextAsc(a.name, b.name);
+  });
+}
+
 function renderTable(rows, columns, options = {}) {
   if (!rows.length) return `<div class="empty">No matching stats.</div>`;
   return `
@@ -595,13 +614,16 @@ function renderTableHeader(key, label, index, options = {}) {
   const isNumber = index > 2;
   if (!options.sortable) return `<th class="${isNumber ? "number" : ""}">${label}</th>`;
   const isActive = options.activeSort === key;
-  const direction = isActive ? options.sortDirection : defaultLeaderSortDirection(key);
+  const direction = isActive ? options.sortDirection : (options.defaultSortDirection || defaultLeaderSortDirection)(key);
   const sortLabel = `${label} ${direction === "asc" ? "ascending" : "descending"}`;
+  const sortAttribute = options.sortAttribute || "data-leader-sort";
+  const scopeAttribute = options.sortScope ? ` data-sort-scope="${escapeAttr(options.sortScope)}"` : "";
   return `
     <th class="${isNumber ? "number" : ""}">
       <button
         class="table-sort ${isActive ? "is-active" : ""}"
-        data-leader-sort="${key}"
+        ${sortAttribute}="${key}"
+        ${scopeAttribute}
         type="button"
         aria-label="Sort by ${escapeAttr(sortLabel)}"
         aria-sort="${isActive ? (direction === "asc" ? "ascending" : "descending") : "none"}"
@@ -886,6 +908,10 @@ function renderTeamDetail() {
   const selected = state.selectedTeam;
   if (!selected) return;
   const detail = selected.detail;
+  const skaterColumns = [["name", "Player"], ["number", "#"], ["gp", "GP"], ["goals", "G"], ["assists", "A"], ["pims", "PIM"], ["shots", "Shots"], ["points", "Pts"]];
+  const goalieColumns = [["name", "Goalie"], ["number", "#"], ["gp", "GP"], ["shots", "Shots"], ["goals_against", "GA"], ["goals_against_average", "GAA"], ["save_pct", "Save %"], ["wins", "W"]];
+  const skaters = sortTeamRows(detail.players || [], state.teamSkaterSort, state.teamSkaterSortDirection);
+  const goalies = sortTeamRows(detail.goalies || [], state.teamGoalieSort, state.teamGoalieSortDirection);
   const panel = $("#teamDetail");
   panel.hidden = false;
   panel.innerHTML = `
@@ -905,11 +931,11 @@ function renderTeamDetail() {
       </div>
       <section>
         <h3>Skaters</h3>
-        <div class="table-wrap">${renderTable(detail.players || [], [["name", "Player"], ["number", "#"], ["gp", "GP"], ["goals", "G"], ["assists", "A"], ["pims", "PIM"], ["shots", "Shots"], ["points", "Pts"]])}</div>
+        <div class="table-wrap">${renderTable(skaters, skaterColumns, { sortable: true, activeSort: state.teamSkaterSort, sortDirection: state.teamSkaterSortDirection, sortAttribute: "data-team-sort", sortScope: "skaters", defaultSortDirection: defaultTeamSortDirection })}</div>
       </section>
       <section>
         <h3>Goalies</h3>
-        <div class="table-wrap">${renderTable(detail.goalies || [], [["name", "Goalie"], ["number", "#"], ["gp", "GP"], ["shots", "Shots"], ["goals_against", "GA"], ["goals_against_average", "GAA"], ["save_pct", "Save %"], ["wins", "W"]])}</div>
+        <div class="table-wrap">${renderTable(goalies, goalieColumns, { sortable: true, activeSort: state.teamGoalieSort, sortDirection: state.teamGoalieSortDirection, sortAttribute: "data-team-sort", sortScope: "goalies", defaultSortDirection: defaultTeamSortDirection })}</div>
       </section>
       <section>
         <h3>Recent and Upcoming Games</h3>
@@ -1482,6 +1508,22 @@ function bindEvents() {
       select.value = sort;
       renderLeaders();
       updateRoute();
+      return;
+    }
+
+    const teamSort = event.target.closest("[data-team-sort]");
+    if (teamSort) {
+      const sort = teamSort.dataset.teamSort;
+      const scope = teamSort.dataset.sortScope;
+      const sortKey = scope === "goalies" ? "teamGoalieSort" : "teamSkaterSort";
+      const directionKey = scope === "goalies" ? "teamGoalieSortDirection" : "teamSkaterSortDirection";
+      if (state[sortKey] === sort) {
+        state[directionKey] = state[directionKey] === "asc" ? "desc" : "asc";
+      } else {
+        state[sortKey] = sort;
+        state[directionKey] = defaultTeamSortDirection(sort);
+      }
+      renderTeamDetail();
       return;
     }
 
