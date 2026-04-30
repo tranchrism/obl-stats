@@ -1,4 +1,4 @@
-const DEFAULT_HISTORY_START_YEAR = 2017;
+const DEFAULT_HISTORY_START_YEAR = 2015;
 const PLAYER_LANDING_LIMIT = 10;
 const LOCAL_API_HOSTS = new Set(["", "127.0.0.1", "localhost"]);
 const USE_STATIC_DATA = new URLSearchParams(window.location.search).get("data") === "static" || !LOCAL_API_HOSTS.has(window.location.hostname);

@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 BASE_URL = "https://stats.sharksice.timetoscore.com/"
 LEAGUE_ID = "27"
 CACHE_TTL_SECONDS = 24 * 60 * 60
-HISTORY_START_YEAR = 2017
+HISTORY_START_YEAR = 2015
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "static"
 

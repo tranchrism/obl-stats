@@ -2,7 +2,7 @@
 
 A local, mobile-friendly hockey stats dashboard for the Oakland Sharks Ice TimeToScore league pages.
 
-Stats are intentionally limited to 2017 onward.
+Stats are intentionally limited to 2015 onward.
 
 ## What It Uses
 
@@ -50,7 +50,7 @@ The included GitHub Actions workflow deploys `dist/` to GitHub Pages:
 - on pushes to `main`
 - manually via `workflow_dispatch`
 - nightly at `10:30 UTC`, roughly middle-of-the-night Pacific time
-- regular-season historical data from 2017 onward, with player profiles generated from exported division stats
+- regular-season historical data from 2015 onward, with player profiles generated from exported division stats
 
 ## Cloudflare Hosting
 
