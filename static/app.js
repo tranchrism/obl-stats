@@ -707,11 +707,11 @@ function renderBoxScore(game) {
         <span>${teamAbbr(payload.away_team || game.away_team)} ${number(payload.away_goals ?? game.away_goals)} · ${teamAbbr(payload.home_team || game.home_team)} ${number(payload.home_goals ?? game.home_goals)}</span>
       </div>
       ${renderShotSummary(payload, game, shots)}
-      ${scoring.length ? scoring.map((period) => renderBoxScorePeriod(period, payload, game)).join("") : `<div class="empty">No scoring events available.</div>`}
+      ${scoring.length ? sortBoxScorePeriods(scoring).map((period) => renderBoxScorePeriod(period, payload, game)).join("") : `<div class="empty">No scoring events available.</div>`}
       <div class="box-score-header penalties-header">
         <h4>Penalties</h4>
       </div>
-      ${penalties.length ? penalties.map((period) => renderPenaltyPeriod(period)).join("") : `<div class="empty">No penalties listed.</div>`}
+      ${penalties.length ? sortBoxScorePeriods(penalties).map((period) => renderPenaltyPeriod(period)).join("") : `<div class="empty">No penalties listed.</div>`}
     </div>
   `;
 }
@@ -736,7 +736,7 @@ function renderBoxScorePeriod(period, payload, game) {
   return `
     <section class="box-score-period">
       <header><b>${period.label}</b><span>${awayAbbr}</span><span>${homeAbbr}</span></header>
-      ${(period.events || []).map((event) => renderGoalEvent(event)).join("")}
+      ${sortBoxScoreEvents(period.events || []).map((event) => renderGoalEvent(event)).join("")}
     </section>
   `;
 }
@@ -764,7 +764,7 @@ function renderPenaltyPeriod(period) {
   return `
     <section class="box-score-period penalty-period">
       <header><b>${period.label}</b><span>Min</span></header>
-      ${(period.events || []).map((event) => `
+      ${sortBoxScoreEvents(period.events || []).map((event) => `
         <div class="box-score-event penalty-event">
           <span class="event-time">${number(event.time)}</span>
           <div><b>${number(event.player || event.team)}</b><em>${number(event.infraction)}</em></div>
@@ -773,6 +773,22 @@ function renderPenaltyPeriod(period) {
       `).join("")}
     </section>
   `;
+}
+
+function sortBoxScorePeriods(periods) {
+  return [...periods].sort((a, b) => Number(a.period || 0) - Number(b.period || 0));
+}
+
+function sortBoxScoreEvents(events) {
+  return [...events].sort((a, b) => clockSeconds(b.time) - clockSeconds(a.time));
+}
+
+function clockSeconds(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return -1;
+  const [minutes, seconds] = text.split(":");
+  if (seconds == null) return Number(minutes) || 0;
+  return (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
 }
 
 function teamAbbr(name) {

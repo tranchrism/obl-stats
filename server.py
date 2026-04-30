@@ -1017,7 +1017,7 @@ def group_events_by_period(events: list[dict[str, Any]]) -> list[dict[str, Any]]
         grouped.setdefault(period, {"period": period, "label": period_label(period), "events": []})["events"].append(event)
     return [
         {**period, "events": sorted(period["events"], key=lambda event: -seconds_remaining(event.get("time")))}
-        for _, period in sorted(grouped.items(), reverse=True)
+        for _, period in sorted(grouped.items())
     ]
 
 
