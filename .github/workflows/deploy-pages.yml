@@ -59,7 +59,7 @@ jobs:
 
       - name: Export static site
         if: steps.schedule_gate.outputs.should_run == 'true'
-        run: python export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 300
+        run: python export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 75
 
       - name: Configure Pages
         if: steps.schedule_gate.outputs.should_run == 'true'
