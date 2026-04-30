@@ -1037,6 +1037,45 @@ th.number .table-sort {
   margin-top: 14px;
 }
 
+.shot-summary {
+  align-items: center;
+  background: color-mix(in srgb, var(--mint) 12%, transparent);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(110px, 0.8fr) repeat(2, minmax(140px, 1fr)) auto;
+  padding: 10px 4px;
+}
+
+.shot-summary p,
+.shot-summary small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.shot-summary div {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.shot-summary span {
+  color: var(--ink);
+  font-size: 0.86rem;
+  font-weight: 760;
+}
+
+.shot-summary b {
+  color: var(--teal);
+  font-size: 1.12rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .box-score-period header {
   align-items: center;
   color: var(--muted);
@@ -1360,6 +1399,15 @@ th.number .table-sort {
   .box-score-period header,
   .box-score-event {
     grid-template-columns: 54px minmax(160px, 1fr) 34px 34px;
+  }
+
+  .shot-summary {
+    grid-template-columns: minmax(104px, 0.75fr) repeat(2, minmax(120px, 1fr));
+    min-width: 430px;
+  }
+
+  .shot-summary small {
+    display: none;
   }
 
   .penalty-period header,

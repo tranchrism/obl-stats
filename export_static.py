@@ -140,6 +140,8 @@ def export_game_centers(
             cache_path = cache_game_center_dir / f"{game_id}.json" if cache_game_center_dir else None
             if cache_path:
                 payload = read_json(cache_path)
+                if payload and payload.get("schema_version") != server.GAME_CENTER_SCHEMA_VERSION:
+                    payload = None
             if payload is not None:
                 reused += 1
             elif not limit or fetched < limit:

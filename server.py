@@ -26,6 +26,7 @@ CACHE_TTL_SECONDS = 24 * 60 * 60
 HISTORY_START_YEAR = 2015
 GAME_CENTER_PATH = "/get_game_center"
 GAME_CENTER_BOOTSTRAP_URL = urljoin(BASE_URL, "oss-scoresheet")
+GAME_CENTER_SCHEMA_VERSION = 2
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "static"
 
@@ -918,6 +919,9 @@ def normalize_assist(event: dict[str, Any], name_key: str, total_key: str) -> di
 def normalize_game_center(payload: dict[str, Any], game_id: str, season: str, game: dict[str, Any]) -> dict[str, Any]:
     live = payload.get("live") if isinstance(payload.get("live"), dict) else {}
     events = flatten_game_center_events(live.get("events"))
+    shot_summary = live.get("shot_summary") if isinstance(live.get("shot_summary"), dict) else {}
+    away_shots = shot_summary.get("away_shots") if isinstance(shot_summary.get("away_shots"), dict) else {}
+    home_shots = shot_summary.get("home_shots") if isinstance(shot_summary.get("home_shots"), dict) else {}
     away_team = clean_text(str(game.get("away_team") or first_value(payload.get("game_info", {}) if isinstance(payload.get("game_info"), dict) else {}, ["away_team_name", "visitor_team_name"])))
     home_team = clean_text(str(game.get("home_team") or first_value(payload.get("game_info", {}) if isinstance(payload.get("game_info"), dict) else {}, ["home_team_name"])))
     away_score = 0
@@ -977,15 +981,32 @@ def normalize_game_center(payload: dict[str, Any], game_id: str, season: str, ga
             )
 
     return {
+        "schema_version": GAME_CENTER_SCHEMA_VERSION,
         "game_id": game_id,
         "season": season,
         "away_team": away_team,
         "home_team": home_team,
         "away_goals": game.get("away_goals"),
         "home_goals": game.get("home_goals"),
+        "shots": {
+            "away": normalize_shot_summary(away_shots),
+            "home": normalize_shot_summary(home_shots),
+        },
         "scoring": group_events_by_period(goals),
         "penalties": group_events_by_period(penalties),
         "has_events": bool(goals or penalties),
+    }
+
+
+def normalize_shot_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    periods = {
+        str(key): int_or_none(str(value))
+        for key, value in summary.items()
+        if str(key).isdigit()
+    }
+    return {
+        "total": int_or_none(str(summary.get("total", ""))),
+        "periods": periods,
     }
 
 

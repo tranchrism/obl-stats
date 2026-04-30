@@ -699,17 +699,33 @@ function renderBoxScore(game) {
   }
   const scoring = payload.scoring || [];
   const penalties = payload.penalties || [];
+  const shots = payload.shots || {};
   return `
     <div class="box-score-panel">
       <div class="box-score-header">
         <h4>Scoring Summary</h4>
         <span>${teamAbbr(payload.away_team || game.away_team)} ${number(payload.away_goals ?? game.away_goals)} · ${teamAbbr(payload.home_team || game.home_team)} ${number(payload.home_goals ?? game.home_goals)}</span>
       </div>
+      ${renderShotSummary(payload, game, shots)}
       ${scoring.length ? scoring.map((period) => renderBoxScorePeriod(period, payload, game)).join("") : `<div class="empty">No scoring events available.</div>`}
       <div class="box-score-header penalties-header">
         <h4>Penalties</h4>
       </div>
       ${penalties.length ? penalties.map((period) => renderPenaltyPeriod(period)).join("") : `<div class="empty">No penalties listed.</div>`}
+    </div>
+  `;
+}
+
+function renderShotSummary(payload, game, shots) {
+  if (shots.away?.total == null && shots.home?.total == null) return "";
+  const awayName = payload.away_team || game.away_team;
+  const homeName = payload.home_team || game.home_team;
+  return `
+    <div class="shot-summary">
+      <p>Shots on goal</p>
+      <div><span>${escapeAttr(awayName)}</span><b>${number(shots.away?.total)}</b></div>
+      <div><span>${escapeAttr(homeName)}</span><b>${number(shots.home?.total)}</b></div>
+      <small>${teamAbbr(awayName)} / ${teamAbbr(homeName)}</small>
     </div>
   `;
 }
