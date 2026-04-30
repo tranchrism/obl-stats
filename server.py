@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import re
 import ssl
 import time
@@ -22,6 +24,8 @@ BASE_URL = "https://stats.sharksice.timetoscore.com/"
 LEAGUE_ID = "27"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 HISTORY_START_YEAR = 2015
+GAME_CENTER_PATH = "/get_game_center"
+GAME_CENTER_BOOTSTRAP_URL = urljoin(BASE_URL, "oss-scoresheet")
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "static"
 
@@ -201,6 +205,7 @@ class TimetoscoreClient:
         self._cache_lock = RLock()
         self._warm_lock = RLock()
         self._warming: set[str] = set()
+        self._game_center_config: dict[str, str] | None = None
 
     def _cache_get(self, key: str) -> Any | None:
         with self._cache_lock:
@@ -240,6 +245,64 @@ class TimetoscoreClient:
         except (HTTPError, URLError, TimeoutError) as exc:
             raise RuntimeError(f"Could not fetch TimeToScore data from {url}: {exc}") from exc
         return self._cache_set(url, body)
+
+    def fetch_url(self, url: str) -> str:
+        cached = self._cache_get(url)
+        if cached is not None:
+            return cached
+        req = Request(url, headers={"User-Agent": "OaklandHockeyStats/0.1"})
+        try:
+            with urlopen(req, timeout=12) as response:
+                body = response.read().decode("utf-8", errors="replace")
+        except URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                with urlopen(req, timeout=12, context=ssl._create_unverified_context()) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+            else:
+                raise RuntimeError(f"Could not fetch TimeToScore data from {url}: {exc}") from exc
+        except (HTTPError, URLError, TimeoutError) as exc:
+            raise RuntimeError(f"Could not fetch TimeToScore data from {url}: {exc}") from exc
+        return self._cache_set(url, body)
+
+    def game_center_config(self, game_id: str) -> dict[str, str]:
+        if self._game_center_config:
+            return self._game_center_config
+        html = self.fetch_url(f"{GAME_CENTER_BOOTSTRAP_URL}?{urlencode({'game_id': game_id, 'mode': 'display'})}")
+        config: dict[str, str] = {}
+        for key in ("username", "secret", "api_url", "league_id"):
+            match = re.search(rf'"{key}"\s*:\s*"([^"]+)"', html)
+            if match:
+                config[key] = match.group(1)
+        missing = {"username", "secret", "api_url", "league_id"} - set(config)
+        if missing:
+            raise RuntimeError(f"Could not read TimeToScore game-center config: missing {', '.join(sorted(missing))}")
+        self._game_center_config = config
+        return config
+
+    def game_center(self, game_id: str, season: str = "0", game: dict[str, Any] | None = None) -> dict[str, Any]:
+        game_id = clean_text(str(game_id))
+        if not game_id:
+            raise RuntimeError("Missing game_id for game center")
+        config = self.game_center_config(game_id)
+        timestamp = str(int(time.time()))
+        params = {
+            "auth_key": config["username"],
+            "auth_timestamp": timestamp,
+            "body_md5": hashlib.md5(b"").hexdigest(),
+            "game_id": game_id,
+            "league_id": config["league_id"],
+            "season_id": season,
+            "widget": "gamecenter",
+        }
+        query_without_signature = urlencode(params)
+        canonical = f"GET\n{GAME_CENTER_PATH}\n{query_without_signature}"
+        signature = hmac.new(config["secret"].encode("utf-8"), canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+        url = f"https://{config['api_url']}{GAME_CENTER_PATH}?{query_without_signature}&auth_signature={signature}"
+        payload = json.loads(self.fetch_url(url))
+        if isinstance(payload, dict) and isinstance(payload.get("game_center"), dict):
+            payload = payload["game_center"]
+        return normalize_game_center(payload, game_id, season, game or {})
 
     def tables(self, path: str, params: dict[str, str | int | None]) -> list[list[list[Cell]]]:
         html = self.fetch(path, params)
@@ -788,6 +851,155 @@ def parse_records(table: list[list[Cell]], context: dict[str, Any] | None = None
     return records
 
 
+def first_value(source: dict[str, Any], keys: list[str], default: Any = "") -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def seconds_remaining(value: Any) -> int:
+    parts = str(value or "").split(":")
+    if len(parts) != 2:
+        return -1
+    try:
+        return int(parts[0]) * 60 + int(parts[1])
+    except ValueError:
+        return -1
+
+
+def period_sort_value(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        match = re.search(r"\d+", str(value or ""))
+        return int(match.group(0)) if match else 0
+
+
+def period_label(value: Any) -> str:
+    period = period_sort_value(value)
+    if period == 1:
+        return "1st Period"
+    if period == 2:
+        return "2nd Period"
+    if period == 3:
+        return "3rd Period"
+    if period > 3:
+        return f"OT{period - 3}" if period > 4 else "Overtime"
+    return clean_text(str(value or "Period"))
+
+
+def flatten_game_center_events(events: Any) -> list[dict[str, Any]]:
+    if isinstance(events, list):
+        return [event for event in events if isinstance(event, dict)]
+    if not isinstance(events, dict):
+        return []
+    flattened: list[dict[str, Any]] = []
+    for period, period_events in events.items():
+        if not isinstance(period_events, list):
+            continue
+        for event in period_events:
+            if isinstance(event, dict):
+                flattened.append({"period": event.get("period", period), **event})
+    return flattened
+
+
+def normalize_assist(event: dict[str, Any], name_key: str, total_key: str) -> dict[str, Any] | None:
+    name = display_person_name(str(event.get(name_key, "")))
+    if not name:
+        return None
+    return {
+        "name": name,
+        "total": int_or_none(str(event.get(total_key, ""))),
+    }
+
+
+def normalize_game_center(payload: dict[str, Any], game_id: str, season: str, game: dict[str, Any]) -> dict[str, Any]:
+    live = payload.get("live") if isinstance(payload.get("live"), dict) else {}
+    events = flatten_game_center_events(live.get("events"))
+    away_team = clean_text(str(game.get("away_team") or first_value(payload.get("game_info", {}) if isinstance(payload.get("game_info"), dict) else {}, ["away_team_name", "visitor_team_name"])))
+    home_team = clean_text(str(game.get("home_team") or first_value(payload.get("game_info", {}) if isinstance(payload.get("game_info"), dict) else {}, ["home_team_name"])))
+    away_score = 0
+    home_score = 0
+    goals: list[dict[str, Any]] = []
+    penalties: list[dict[str, Any]] = []
+
+    sorted_events = sorted(events, key=lambda event: (period_sort_value(event.get("period")), -seconds_remaining(event.get("time"))))
+    for event in sorted_events:
+        event_type = clean_text(str(first_value(event, ["type", "event_type", "event_type_name"]))).lower().replace(" ", "_")
+        if event_type == "goal":
+            team_name = clean_text(str(first_value(event, ["team_name", "team"])))
+            if team_name and away_team and team_name == away_team:
+                away_score += 1
+            elif team_name and home_team and team_name == home_team:
+                home_score += 1
+            else:
+                # Fall back to the public schedule score orientation when names are absent.
+                team_id = str(first_value(event, ["team_id"]))
+                if team_id and team_id == str(game.get("away_team_id", "")):
+                    away_score += 1
+                elif team_id and team_id == str(game.get("home_team_id", "")):
+                    home_score += 1
+            assists = [
+                assist
+                for assist in (
+                    normalize_assist(event, "ass1_player_name", "ass1_prior"),
+                    normalize_assist(event, "ass2_player_name", "ass2_prior"),
+                )
+                if assist
+            ]
+            goals.append(
+                {
+                    "period": period_sort_value(event.get("period")),
+                    "period_label": period_label(event.get("period")),
+                    "time": clean_text(str(event.get("time", ""))),
+                    "team": team_name,
+                    "scorer": display_person_name(str(first_value(event, ["goal_player_name", "player_name"]))),
+                    "scorer_number": clean_text(str(first_value(event, ["goal_player_jersey", "jersey_number"]))),
+                    "scorer_total": int_or_none(str(first_value(event, ["goal_prior", "player_prior"]))),
+                    "goal_type": clean_text(str(first_value(event, ["goal_type_name"]))),
+                    "assists": assists,
+                    "score": {"away": away_score, "home": home_score},
+                }
+            )
+        elif "penalty" in event_type:
+            penalties.append(
+                {
+                    "period": period_sort_value(event.get("period")),
+                    "period_label": period_label(event.get("period")),
+                    "time": clean_text(str(event.get("time", ""))),
+                    "team": clean_text(str(first_value(event, ["team_name", "team"]))),
+                    "player": display_person_name(str(first_value(event, ["penalty_player_name", "player_name", "player"]))),
+                    "infraction": clean_text(str(first_value(event, ["penalty_type_name", "penalty_name", "infraction", "penalty"]))),
+                    "minutes": clean_text(str(first_value(event, ["penalty_minutes", "minutes", "min"]))),
+                }
+            )
+
+    return {
+        "game_id": game_id,
+        "season": season,
+        "away_team": away_team,
+        "home_team": home_team,
+        "away_goals": game.get("away_goals"),
+        "home_goals": game.get("home_goals"),
+        "scoring": group_events_by_period(goals),
+        "penalties": group_events_by_period(penalties),
+        "has_events": bool(goals or penalties),
+    }
+
+
+def group_events_by_period(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[int, dict[str, Any]] = {}
+    for event in events:
+        period = period_sort_value(event.get("period"))
+        grouped.setdefault(period, {"period": period, "label": period_label(period), "events": []})["events"].append(event)
+    return [
+        {**period, "events": sorted(period["events"], key=lambda event: -seconds_remaining(event.get("time")))}
+        for _, period in sorted(grouped.items(), reverse=True)
+    ]
+
+
 def parse_games_table(table: list[list[Cell]]) -> list[dict[str, Any]]:
     if len(table) < 3:
         return []
@@ -871,6 +1083,11 @@ class AppHandler(SimpleHTTPRequestHandler):
                 payload = client.division_stats(param("season", "0"), param("level"), param("conf", "0"), param("stat_class", "1"))
             elif path == "/api/schedule":
                 payload = client.schedule(param("season", "0"), team=param("team") or None, level=param("level") or None, conf=param("conf") or None)
+            elif path == "/api/game-center":
+                schedule = client.schedule(param("season", "0"))
+                game_id = param("game_id")
+                game = next((entry for entry in schedule.get("games", []) if str(entry.get("game_id", "")) == game_id), {})
+                payload = client.game_center(game_id, str(schedule.get("season", param("season", "0"))), game)
             elif path == "/api/team":
                 payload = client.team(param("season", "0"), param("team"))
             elif path == "/api/player":

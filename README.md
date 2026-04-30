@@ -13,8 +13,9 @@ The Oakland public stats page does not appear to expose a documented public API.
 - league and team schedules
 - team player, goalie, situation, and special-teams stats
 - scoresheet PDF links for completed games
+- game-center scoring and penalty events for completed games
 
-The `oss-scoresheet` page also bootstraps an internal signed API at `api.sharksice.timetoscore.com` for the game-center widget. That API is real, but it is not documented and the first version of this app uses the stable public pages instead.
+The `oss-scoresheet` page also bootstraps an internal signed API at `api.sharksice.timetoscore.com` for the game-center widget. That API is real but undocumented, so exports cache game-center JSON and keep the public schedule usable even if an individual box score cannot be fetched.
 
 ## Run
 
@@ -42,15 +43,16 @@ Why this shape:
 Build the static site locally:
 
 ```bash
-python3 export_static.py --out dist
+python3 export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache
 ```
 
 The included GitHub Actions workflow deploys `dist/` to GitHub Pages:
 
 - on pushes to `main`
 - manually via `workflow_dispatch`
-- nightly at `10:30 UTC`, roughly middle-of-the-night Pacific time
+- nightly at 1am Pacific time, using UTC cron triggers plus a Pacific-time gate for daylight saving changes
 - regular-season historical data from 2015 onward, with player profiles generated from exported division stats
+- cached game-center box scores, so previously exported final games are reused and only missing final-game box scores are fetched on later runs
 
 ## Cloudflare Hosting
 
@@ -71,5 +73,6 @@ For local backend development, keep using `python3 server.py`. For GitHub Pages,
 - `GET /api/standings?season=0`
 - `GET /api/division-stats?season=76&level=99&conf=0`
 - `GET /api/schedule?season=76`
+- `GET /api/game-center?season=76&game_id=590334`
 - `GET /api/team?season=76&team=718`
 - `GET /api/player?name=Christopher%20M%20Tran&season_type=regular`

@@ -19,6 +19,13 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
+def read_json(path: Path) -> Any | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def copy_static_assets(out_dir: Path) -> None:
     if out_dir.exists():
         shutil.rmtree(out_dir)
@@ -93,7 +100,77 @@ def new_team_payload(season_id: str, team: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def export_site(out_dir: Path, current_only: bool = False, include_playoffs: bool = True, include_profiles: bool = True) -> dict[str, Any]:
+def export_game_centers(
+    client: server.TimetoscoreClient,
+    schedules: dict[str, dict[str, Any]],
+    out_dir: Path,
+    cache_dir: Path | None,
+    limit: int = 0,
+) -> dict[str, int]:
+    exported = 0
+    fetched = 0
+    reused = 0
+    failed = 0
+    seen: dict[str, dict[str, Any] | None] = {}
+    game_center_dir = out_dir / "game-centers"
+    cache_game_center_dir = cache_dir / "game-centers" if cache_dir else None
+
+    final_games: list[tuple[str, dict[str, Any]]] = []
+    for season_id, schedule in schedules.items():
+        for game in schedule.get("games", []):
+            if game.get("final") and game.get("game_id"):
+                final_games.append((season_id, game))
+
+    for season_id, game in final_games:
+        game_id = str(game.get("game_id", ""))
+        if not game_id:
+            continue
+        cached_payload = seen.get(game_id)
+        if game_id in seen:
+            payload = cached_payload
+        else:
+            payload = None
+            cache_path = cache_game_center_dir / f"{game_id}.json" if cache_game_center_dir else None
+            if cache_path:
+                payload = read_json(cache_path)
+            if payload is not None:
+                reused += 1
+            elif not limit or fetched < limit:
+                try:
+                    payload = client.game_center(game_id, season_id, game)
+                    fetched += 1
+                    if cache_path:
+                        write_json(cache_path, payload)
+                except Exception as exc:
+                    failed += 1
+                    payload = {"game_id": game_id, "season": season_id, "error": str(exc), "has_events": False}
+            seen[game_id] = payload
+
+        if not payload or payload.get("error"):
+            continue
+        write_json(game_center_dir / f"{game_id}.json", payload)
+        game["boxscore_available"] = True
+        game["boxscore_path"] = f"data/game-centers/{game_id}.json"
+        exported += 1
+
+    return {
+        "game_center_files": exported,
+        "game_centers_fetched": fetched,
+        "game_centers_reused": reused,
+        "game_centers_failed": failed,
+        "game_centers_missing": max(len({game.get("game_id") for _, game in final_games if game.get("game_id")}) - len([game_id for game_id, payload in seen.items() if payload and not payload.get("error")]), 0),
+    }
+
+
+def export_site(
+    out_dir: Path,
+    current_only: bool = False,
+    include_playoffs: bool = True,
+    include_profiles: bool = True,
+    include_game_centers: bool = False,
+    cache_dir: Path | None = None,
+    game_center_limit: int = 0,
+) -> dict[str, Any]:
     copy_static_assets(out_dir)
 
     client = server.TimetoscoreClient()
@@ -158,6 +235,12 @@ def export_site(out_dir: Path, current_only: bool = False, include_playoffs: boo
     for season_id in exported_schedule_ids:
         schedule = client.schedule(season_id)
         schedules[season_id] = schedule
+    game_center_manifest = (
+        export_game_centers(client, schedules, data_dir, cache_dir, limit=game_center_limit)
+        if include_game_centers
+        else {"game_center_files": 0, "game_centers_fetched": 0, "game_centers_reused": 0, "game_centers_failed": 0, "game_centers_missing": 0}
+    )
+    for season_id, schedule in schedules.items():
         write_json(schedule_dir / f"{season_id}.json", schedule)
     for (season_id, team_id), payload in team_payloads.items():
         team = team_context.get((season_id, team_id), {})
@@ -237,6 +320,8 @@ def export_site(out_dir: Path, current_only: bool = False, include_playoffs: boo
         "player_profile_files": profile_files,
         "include_playoffs": include_playoffs,
         "include_profiles": include_profiles,
+        "include_game_centers": include_game_centers,
+        **game_center_manifest,
     }
     write_json(data_dir / "manifest.json", manifest)
     return manifest
@@ -248,6 +333,9 @@ def main() -> None:
     parser.add_argument("--current-only", action="store_true", help="Export only the current season shell data.")
     parser.add_argument("--skip-playoffs", action="store_true", help="Skip playoff player profile JSON.")
     parser.add_argument("--skip-profiles", action="store_true", help="Skip player profile JSON. Useful for quick build smoke tests.")
+    parser.add_argument("--include-game-centers", action="store_true", help="Export cached game-center box scores for final games.")
+    parser.add_argument("--cache-dir", default=".export-cache", type=Path, help="Persistent cache directory reused by scheduled exports.")
+    parser.add_argument("--game-center-limit", default=0, type=int, help="Maximum missing game centers to fetch this run. 0 means no limit.")
     args = parser.parse_args()
 
     manifest = export_site(
@@ -255,6 +343,9 @@ def main() -> None:
         current_only=args.current_only,
         include_playoffs=not args.skip_playoffs,
         include_profiles=not args.skip_profiles,
+        include_game_centers=args.include_game_centers,
+        cache_dir=args.cache_dir,
+        game_center_limit=args.game_center_limit,
     )
     print(json.dumps(manifest, indent=2))
 

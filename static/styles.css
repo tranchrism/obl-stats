@@ -915,6 +915,10 @@ th.number .table-sort {
   padding: 18px 0;
 }
 
+.game-row.is-expanded {
+  align-items: start;
+}
+
 .game-row:first-child {
   border-top: 1px solid var(--line-strong);
 }
@@ -972,6 +976,114 @@ th.number .table-sort {
   padding: 9px 12px;
   text-align: center;
   text-transform: uppercase;
+}
+
+.game-actions {
+  align-items: end;
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.boxscore-toggle {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 780;
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.box-score-panel {
+  background: rgba(255, 253, 247, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  grid-column: 1 / -1;
+  padding: 14px;
+}
+
+.box-score-header,
+.box-score-period header,
+.box-score-event {
+  display: grid;
+  grid-template-columns: 72px 1fr 42px 42px;
+}
+
+.box-score-header {
+  align-items: center;
+  border-bottom: 2px solid var(--gold);
+  color: var(--muted);
+  gap: 10px;
+  padding: 0 4px 8px;
+}
+
+.box-score-header h4 {
+  color: var(--ink);
+  grid-column: 1 / 3;
+  margin: 0;
+}
+
+.box-score-header span {
+  grid-column: 3 / 5;
+  justify-self: end;
+  font-size: 0.78rem;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.penalties-header {
+  margin-top: 14px;
+}
+
+.box-score-period header {
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.76rem;
+  gap: 10px;
+  padding: 8px 4px;
+  text-transform: uppercase;
+}
+
+.box-score-period header b {
+  grid-column: 1 / 3;
+}
+
+.box-score-period header span,
+.event-score {
+  justify-self: center;
+}
+
+.box-score-event {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  gap: 10px;
+  padding: 9px 4px;
+}
+
+.event-time,
+.event-score {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.box-score-event b {
+  display: block;
+  font-size: 0.94rem;
+}
+
+.box-score-event em {
+  color: var(--muted);
+  display: block;
+  font-size: 0.84rem;
+  margin-top: 2px;
+}
+
+.penalty-period header,
+.penalty-event {
+  grid-template-columns: 72px 1fr 42px;
 }
 
 .detail-panel {
@@ -1232,6 +1344,31 @@ th.number .table-sort {
 
   .game-row {
     grid-template-columns: 1fr;
+  }
+
+  .game-actions {
+    align-items: stretch;
+    justify-items: stretch;
+  }
+
+  .game-status,
+  .boxscore-toggle {
+    width: 100%;
+  }
+
+  .box-score-header,
+  .box-score-period header,
+  .box-score-event {
+    grid-template-columns: 54px minmax(160px, 1fr) 34px 34px;
+  }
+
+  .penalty-period header,
+  .penalty-event {
+    grid-template-columns: 54px minmax(160px, 1fr) 34px;
+  }
+
+  .box-score-panel {
+    overflow-x: auto;
   }
 
   .link-button {

@@ -29,12 +29,14 @@ const state = {
   playerSeasonType: "regular",
   playerProfileDivisionFilter: "all",
   playerProfileTeamFilter: "all",
+  expandedGameIds: new Set(),
 };
 
 let activePlayerRequest = 0;
 let isApplyingRoute = false;
 const playerProfileCache = new Map();
 const playerProfilePrefetches = new Set();
+const gameCenterCache = new Map();
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -71,6 +73,9 @@ function staticDataPath(path) {
   }
   if (url.pathname === "/api/schedule") {
     return relativeDataPath(`schedule/${season}.json`);
+  }
+  if (url.pathname === "/api/game-center") {
+    return relativeDataPath(`game-centers/${params.get("game_id") || ""}.json`);
   }
   if (url.pathname === "/api/team") {
     return relativeDataPath(`teams/${season}/${params.get("team") || ""}.json`);
@@ -657,8 +662,11 @@ function scheduleTeamsForDivision(division) {
 }
 
 function renderGame(game) {
+  const gameId = String(game.game_id || "");
+  const expanded = gameId && state.expandedGameIds.has(gameId);
+  const canShowBoxScore = game.final && gameId && (!USE_STATIC_DATA || game.boxscore_available);
   return `
-    <article class="game-row ${game.final ? "final" : "upcoming"}">
+    <article class="game-row ${game.final ? "final" : "upcoming"} ${expanded ? "is-expanded" : ""}">
       <div class="game-meta">
         <b>${game.date}</b><br />
         ${game.time}<br />
@@ -671,9 +679,115 @@ function renderGame(game) {
         </div>
         <div class="game-meta">${game.level} &middot; ${game.type}</div>
       </div>
-      <span class="game-status">${game.final ? "Final" : "Upcoming"}</span>
+      <div class="game-actions">
+        <span class="game-status">${game.final ? "Final" : "Upcoming"}</span>
+        ${canShowBoxScore ? `<button class="boxscore-toggle" data-boxscore-game="${escapeAttr(gameId)}" type="button" aria-expanded="${expanded ? "true" : "false"}">${expanded ? "Hide box score" : "Box score"}</button>` : ""}
+      </div>
+      ${expanded ? renderBoxScore(game) : ""}
     </article>
   `;
+}
+
+function renderBoxScore(game) {
+  const gameId = String(game.game_id || "");
+  const payload = gameCenterCache.get(gameId);
+  if (!payload) {
+    return `<div class="box-score-panel"><div class="empty">Loading box score...</div></div>`;
+  }
+  if (payload.error) {
+    return `<div class="box-score-panel"><div class="empty">${escapeAttr(payload.error)}</div></div>`;
+  }
+  const scoring = payload.scoring || [];
+  const penalties = payload.penalties || [];
+  return `
+    <div class="box-score-panel">
+      <div class="box-score-header">
+        <h4>Scoring Summary</h4>
+        <span>${teamAbbr(payload.away_team || game.away_team)} ${number(payload.away_goals ?? game.away_goals)} · ${teamAbbr(payload.home_team || game.home_team)} ${number(payload.home_goals ?? game.home_goals)}</span>
+      </div>
+      ${scoring.length ? scoring.map((period) => renderBoxScorePeriod(period, payload, game)).join("") : `<div class="empty">No scoring events available.</div>`}
+      <div class="box-score-header penalties-header">
+        <h4>Penalties</h4>
+      </div>
+      ${penalties.length ? penalties.map((period) => renderPenaltyPeriod(period)).join("") : `<div class="empty">No penalties listed.</div>`}
+    </div>
+  `;
+}
+
+function renderBoxScorePeriod(period, payload, game) {
+  const awayAbbr = teamAbbr(payload.away_team || game.away_team);
+  const homeAbbr = teamAbbr(payload.home_team || game.home_team);
+  return `
+    <section class="box-score-period">
+      <header><b>${period.label}</b><span>${awayAbbr}</span><span>${homeAbbr}</span></header>
+      ${(period.events || []).map((event) => renderGoalEvent(event)).join("")}
+    </section>
+  `;
+}
+
+function renderGoalEvent(event) {
+  const total = event.scorer_total ? ` (${event.scorer_total})` : "";
+  const goalType = event.goal_type ? ` · ${event.goal_type}` : "";
+  const assists = (event.assists || []).length
+    ? `<em>Assists: ${(event.assists || []).map((assist) => `${assist.name}${assist.total ? ` (${assist.total})` : ""}`).join(", ")}</em>`
+    : `<em>Unassisted</em>`;
+  return `
+    <div class="box-score-event">
+      <span class="event-time">${number(event.time)}</span>
+      <div>
+        <b>${number(event.scorer)}${total}</b>${goalType}
+        ${assists}
+      </div>
+      <span class="event-score">${number(event.score?.away)}</span>
+      <span class="event-score">${number(event.score?.home)}</span>
+    </div>
+  `;
+}
+
+function renderPenaltyPeriod(period) {
+  return `
+    <section class="box-score-period penalty-period">
+      <header><b>${period.label}</b><span>Min</span></header>
+      ${(period.events || []).map((event) => `
+        <div class="box-score-event penalty-event">
+          <span class="event-time">${number(event.time)}</span>
+          <div><b>${number(event.player || event.team)}</b><em>${number(event.infraction)}</em></div>
+          <span class="event-score">${number(event.minutes)}</span>
+        </div>
+      `).join("")}
+    </section>
+  `;
+}
+
+function teamAbbr(name) {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return "-";
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  return words.map((word) => word[0]).join("").slice(0, 3).toUpperCase();
+}
+
+function rerenderGameLists() {
+  renderSchedule();
+  if (state.selectedTeam) renderTeamDetail();
+}
+
+async function toggleBoxScore(gameId) {
+  if (!gameId) return;
+  if (state.expandedGameIds.has(gameId)) {
+    state.expandedGameIds.delete(gameId);
+    rerenderGameLists();
+    return;
+  }
+  state.expandedGameIds.add(gameId);
+  rerenderGameLists();
+  if (gameCenterCache.has(gameId)) return;
+  try {
+    const payload = await api(`/api/game-center?season=${encodeURIComponent(state.season)}&game_id=${encodeURIComponent(gameId)}`);
+    gameCenterCache.set(gameId, payload);
+  } catch (error) {
+    gameCenterCache.set(gameId, { error: error.message });
+  }
+  rerenderGameLists();
 }
 
 function renderTeams() {
@@ -1345,6 +1459,12 @@ function bindEvents() {
       $$("#scheduleMode button").forEach((button) => button.classList.toggle("is-active", button === scheduleMode));
       renderSchedule();
       updateRoute();
+      return;
+    }
+
+    const boxScoreButton = event.target.closest("[data-boxscore-game]");
+    if (boxScoreButton) {
+      toggleBoxScore(boxScoreButton.dataset.boxscoreGame);
       return;
     }
 

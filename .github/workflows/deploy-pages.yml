@@ -5,8 +5,9 @@ on:
     branches: ["main"]
   workflow_dispatch:
   schedule:
-    # UTC cron: roughly middle-of-the-night Pacific time.
-    - cron: "30 10 * * *"
+    # GitHub cron is UTC-only; the gate step below keeps this at 1am Pacific across DST.
+    - cron: "0 8 * * *"
+    - cron: "0 9 * * *"
 
 permissions:
   contents: read
@@ -27,35 +28,60 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     runs-on: ubuntu-latest
     steps:
+      - name: Check scheduled local hour
+        id: schedule_gate
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ] || [ "$(TZ=America/Los_Angeles date +%H)" = "01" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping scheduled run because it is not 1am Pacific."
+          fi
+
       - name: Checkout
+        if: steps.schedule_gate.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.schedule_gate.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Restore export cache
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: .export-cache
+          key: export-cache-${{ github.run_id }}
+          restore-keys: |
+            export-cache-
+
       - name: Export static site
-        run: python export_static.py --out dist --skip-playoffs
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        run: python export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache
 
       - name: Configure Pages
+        if: steps.schedule_gate.outputs.should_run == 'true'
         uses: actions/configure-pages@v5
         with:
           enablement: true
 
       - name: Upload Pages artifact
+        if: steps.schedule_gate.outputs.should_run == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
       - name: Deploy to GitHub Pages
+        if: steps.schedule_gate.outputs.should_run == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
 
       - name: Deploy to Cloudflare
-        if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
+        if: ${{ steps.schedule_gate.outputs.should_run == 'true' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
         run: npx wrangler@latest deploy
 
       - name: Skip Cloudflare deploy
-        if: ${{ env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '' }}
+        if: ${{ steps.schedule_gate.outputs.should_run == 'true' && (env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '') }}
         run: echo "Cloudflare deploy skipped. Add CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN repository secrets to enable it."

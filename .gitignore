@@ -4,3 +4,4 @@ dist/
 dist-smoke/
 dist-smoke-current/
 dist-historical-smoke/
+.export-cache*/
