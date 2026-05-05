@@ -60,6 +60,12 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
+      - name: Set up Node for Cloudflare
+        if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Deploy to Cloudflare
         if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
         run: npx wrangler@latest deploy

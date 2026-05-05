@@ -100,6 +100,71 @@ def new_team_payload(season_id: str, team: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def int_sort_value(value: Any) -> int:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def person_team_key(team: Any, name: Any) -> tuple[str, str]:
+    return (server.normalize_name(str(team or "")), server.normalize_name(str(name or "")))
+
+
+def box_score_event_sort_key(event: dict[str, Any]) -> tuple[int, int]:
+    return (
+        server.period_sort_value(event.get("period")),
+        -server.seconds_remaining(event.get("time")),
+    )
+
+
+def apply_team_scoped_box_score_totals(records: list[dict[str, Any]]) -> None:
+    """Replace source-wide event totals with season running totals for that team."""
+    records_by_season: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        payload = record.get("payload")
+        if isinstance(payload, dict):
+            records_by_season.setdefault(str(payload.get("season", "")), []).append(record)
+
+    for season_records in records_by_season.values():
+        goal_totals: dict[tuple[str, str], int] = {}
+        assist_totals: dict[tuple[str, str], int] = {}
+        season_records.sort(key=lambda record: int_sort_value(record.get("game_id")))
+
+        for record in season_records:
+            payload = record.get("payload", {})
+            scoring = payload.get("scoring", []) if isinstance(payload, dict) else []
+            if not isinstance(scoring, list):
+                continue
+
+            events: list[dict[str, Any]] = []
+            for period in scoring:
+                if isinstance(period, dict) and isinstance(period.get("events"), list):
+                    events.extend(event for event in period["events"] if isinstance(event, dict))
+
+            for event in sorted(events, key=box_score_event_sort_key):
+                team = event.get("team")
+                scorer = event.get("scorer")
+                if team and scorer:
+                    key = person_team_key(team, scorer)
+                    goal_totals[key] = goal_totals.get(key, 0) + 1
+                    event["scorer_total"] = goal_totals[key]
+                    event["scorer_total_scope"] = "team"
+
+                assists = event.get("assists", [])
+                if not isinstance(assists, list):
+                    continue
+                for assist in assists:
+                    if not isinstance(assist, dict):
+                        continue
+                    name = assist.get("name")
+                    if team and name:
+                        key = person_team_key(team, name)
+                        assist_totals[key] = assist_totals.get(key, 0) + 1
+                        assist["total"] = assist_totals[key]
+                        assist["total_scope"] = "team"
+
+
 def export_game_centers(
     client: server.TimetoscoreClient,
     schedules: dict[str, dict[str, Any]],
@@ -112,6 +177,7 @@ def export_game_centers(
     reused = 0
     failed = 0
     seen: dict[str, dict[str, Any] | None] = {}
+    records: list[dict[str, Any]] = []
     game_center_dir = out_dir / "game-centers"
     cache_game_center_dir = cache_dir / "game-centers" if cache_dir else None
 
@@ -157,10 +223,14 @@ def export_game_centers(
 
         if not payload or payload.get("error"):
             continue
-        write_json(game_center_dir / f"{game_id}.json", payload)
+        records.append({"game_id": game_id, "payload": payload})
         game["boxscore_available"] = True
         game["boxscore_path"] = f"data/game-centers/{game_id}.json"
         exported += 1
+
+    apply_team_scoped_box_score_totals(records)
+    for record in records:
+        write_json(game_center_dir / f"{record['game_id']}.json", record["payload"])
 
     return {
         "game_center_files": exported,
