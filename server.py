@@ -549,34 +549,58 @@ class TimetoscoreClient:
             apply_result(str(game.get("away_team_id", "")), str(game.get("away_team", "")), away_goals, home_goals)
             apply_result(str(game.get("home_team_id", "")), str(game.get("home_team", "")), home_goals, away_goals)
 
+    def api_season_stats(self, season: str, stat_class: str = "1") -> dict[str, list[dict[str, Any]]]:
+        resolved_season = self.current_season_id() if str(season) == "0" else str(season)
+        cache_key = f"api-season-stats:{resolved_season}:{stat_class}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        skater_payload = self.api(
+            "get_skaters",
+            {"league_id": LEAGUE_ID, "season_id": resolved_season, "stat_class": stat_class},
+        )
+        goalie_payload = self.api(
+            "get_goalies",
+            {"league_id": LEAGUE_ID, "season_id": resolved_season, "stat_class": stat_class},
+        )
+        return self._cache_set(
+            cache_key,
+            {
+                "players": normalize_api_skaters(skater_payload),
+                "goalies": normalize_api_goalies(goalie_payload),
+            },
+        )
+
     def division_stats(self, season: str, level: str, conf: str = "0", stat_class: str = "1") -> dict[str, Any]:
         try:
             resolved_season = self.current_season_id() if str(season) == "0" else str(season)
-            skater_payload = self.api(
-                "get_skaters",
-                {
-                    "league_id": LEAGUE_ID,
-                    "season_id": resolved_season,
-                    "stat_class": stat_class,
-                    "level_id": level,
-                    "conf_id": conf,
-                },
+            standings = self.standings(resolved_season)
+            division = next(
+                (
+                    division
+                    for division in standings.get("divisions", [])
+                    if str(division.get("level")) == str(level) and str(division.get("conf", "0")) == str(conf)
+                ),
+                None,
             )
-            goalie_payload = self.api(
-                "get_goalies",
-                {
-                    "league_id": LEAGUE_ID,
-                    "season_id": resolved_season,
-                    "stat_class": stat_class,
-                    "level_id": level,
-                    "conf_id": conf,
-                },
-            )
+            if not division:
+                raise RuntimeError(f"Division {level}:{conf} not found for season {resolved_season}")
+            team_ids = {str(team.get("id", "")) for team in division.get("teams", []) if team.get("id")}
+            team_names = {normalize_name(str(team.get("name", ""))) for team in division.get("teams", []) if team.get("name")}
+            season_stats = self.api_season_stats(resolved_season, stat_class)
+
+            def in_division(row: dict[str, Any]) -> bool:
+                return str(row.get("team_id", "")) in team_ids or normalize_name(str(row.get("team", ""))) in team_names
+
+            context = {"level": level, "conf": conf}
             result = {
-                "players": normalize_api_skaters(skater_payload, context={"level": level, "conf": conf}),
-                "goalies": normalize_api_goalies(goalie_payload, context={"level": level, "conf": conf}),
+                "players": [{**row, **context} for row in season_stats["players"] if in_division(row)],
+                "goalies": [{**row, **context} for row in season_stats["goalies"] if in_division(row)],
             }
             result["players"] = remove_goalie_overlap_from_skaters(result["players"], result["goalies"])
+            result["players"].sort(key=lambda row: (row.get("points") or 0, row.get("goals") or 0), reverse=True)
+            result["goalies"].sort(key=lambda row: (row.get("save_pct") or 0, row.get("gp") or 0), reverse=True)
             return result
         except RuntimeError:
             pass
