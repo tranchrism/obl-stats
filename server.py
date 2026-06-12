@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import http.cookiejar
 import re
 import ssl
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime
 from html.parser import HTMLParser
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -17,10 +19,12 @@ from threading import RLock, Thread
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPCookieProcessor, HTTPSHandler, Request, build_opener, urlopen
 
 
 BASE_URL = "https://stats.sharksice.timetoscore.com/"
+API_PROXY_PATH = "test/api-proxy.php"
+API_BOOTSTRAP_PATH = "test/site.php"
 LEAGUE_ID = "27"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 HISTORY_START_YEAR = 2015
@@ -207,6 +211,9 @@ class TimetoscoreClient:
         self._warm_lock = RLock()
         self._warming: set[str] = set()
         self._game_center_config: dict[str, str] | None = None
+        self._api_cookiejar = http.cookiejar.CookieJar()
+        self._api_opener = build_opener(HTTPCookieProcessor(self._api_cookiejar))
+        self._api_proxy_session: str | None = None
 
     def _cache_get(self, key: str) -> Any | None:
         with self._cache_lock:
@@ -266,6 +273,76 @@ class TimetoscoreClient:
             raise RuntimeError(f"Could not fetch TimeToScore data from {url}: {exc}") from exc
         return self._cache_set(url, body)
 
+    def api_bootstrap(self) -> str:
+        if self._api_proxy_session:
+            return self._api_proxy_session
+        url = urljoin(BASE_URL, f"{API_BOOTSTRAP_PATH}?{urlencode({'league': LEAGUE_ID})}")
+        req = Request(url, headers={"User-Agent": "OaklandHockeyStats/0.1"})
+        try:
+            with self._api_opener.open(req, timeout=12) as response:
+                html = response.read().decode("utf-8", errors="replace")
+        except URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                self._api_cookiejar = http.cookiejar.CookieJar()
+                self._api_opener = build_opener(
+                    HTTPCookieProcessor(self._api_cookiejar),
+                    HTTPSHandler(context=ssl._create_unverified_context()),
+                )
+                with self._api_opener.open(req, timeout=12) as response:
+                    html = response.read().decode("utf-8", errors="replace")
+            else:
+                raise RuntimeError(f"Could not bootstrap TimeToScore API proxy from {url}: {exc}") from exc
+        match = re.search(r'data-proxy-session="([^"]+)"', html)
+        if not match:
+            raise RuntimeError("Could not read TimeToScore API proxy session")
+        self._api_proxy_session = match.group(1)
+        return self._api_proxy_session
+
+    def api(self, endpoint: str, params: dict[str, str | int | None], retry: bool = True) -> dict[str, Any]:
+        clean_params = {
+            key: str(value)
+            for key, value in params.items()
+            if value not in (None, "", -1)
+        }
+        query = urlencode({"endpoint": endpoint, **clean_params})
+        cache_key = f"api:{endpoint}:{query}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        session = self.api_bootstrap()
+        url = urljoin(BASE_URL, f"{API_PROXY_PATH}?{query}")
+        req = Request(
+            url,
+            headers={
+                "User-Agent": "OaklandHockeyStats/0.1",
+                "X-Proxy-Session": session,
+                "Referer": urljoin(BASE_URL, f"{API_BOOTSTRAP_PATH}?{urlencode({'league': LEAGUE_ID})}"),
+            },
+        )
+        try:
+            with self._api_opener.open(req, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        except HTTPError as exc:
+            if retry and exc.code == HTTPStatus.UNAUTHORIZED:
+                self._api_proxy_session = None
+                return self.api(endpoint, params, retry=False)
+            raise RuntimeError(f"TimeToScore API {endpoint} returned HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Could not fetch TimeToScore API {endpoint}: {exc}") from exc
+        return self._cache_set(cache_key, payload)
+
+    def league_metadata(self) -> dict[str, Any]:
+        payload = self.api("get_leagues", {"league_id": LEAGUE_ID})
+        leagues = payload.get("leagues") if isinstance(payload, dict) else None
+        if not isinstance(leagues, list) or not leagues:
+            raise RuntimeError("TimeToScore API get_leagues returned no leagues")
+        return leagues[0]
+
+    def current_season_id(self) -> str:
+        return str(self.league_metadata().get("current_season") or "0")
+
     def game_center_config(self, game_id: str) -> dict[str, str]:
         if self._game_center_config:
             return self._game_center_config
@@ -285,6 +362,14 @@ class TimetoscoreClient:
         game_id = clean_text(str(game_id))
         if not game_id:
             raise RuntimeError("Missing game_id for game center")
+        try:
+            payload = self.api("get_game_center", {"game_id": game_id, "stat_class": "1"})
+            if isinstance(payload, dict) and isinstance(payload.get("game_center"), dict):
+                payload = payload["game_center"]
+            return normalize_game_center(payload, game_id, season, game or {})
+        except RuntimeError:
+            pass
+
         config = self.game_center_config(game_id)
         timestamp = str(int(time.time()))
         params = {
@@ -312,6 +397,27 @@ class TimetoscoreClient:
         return parser.tables
 
     def seasons(self) -> list[dict[str, Any]]:
+        try:
+            league = self.league_metadata()
+            current_season = str(league.get("current_season") or "")
+            seasons: list[dict[str, Any]] = [{"id": "0", "name": "Current", "current": True}]
+            for row in league.get("seasons", []):
+                if not isinstance(row, dict):
+                    continue
+                season_id = str(row.get("season_id", ""))
+                if not season_id or season_id == current_season:
+                    continue
+                seasons.append(
+                    {
+                        "id": season_id,
+                        "name": clean_text(str(row.get("season_name", ""))) or season_id,
+                        "current": False,
+                    }
+                )
+            return [season for season in seasons if is_supported_season(season)]
+        except RuntimeError:
+            pass
+
         html = self.fetch("display-stats.php", {"league": LEAGUE_ID})
         parser = OptionParser()
         parser.feed(html)
@@ -329,6 +435,16 @@ class TimetoscoreClient:
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+
+        try:
+            payload = self.api(
+                "get_standings",
+                {"league_id": LEAGUE_ID, "season_id": season or "0", "stat_class": "1"},
+            )
+            normalized = normalize_api_standings(payload, season, self.seasons())
+            return self._cache_set(cache_key, normalized)
+        except RuntimeError:
+            pass
 
         tables = self.tables("display-stats.php", {"league": LEAGUE_ID, "season": season})
         divisions: list[dict[str, Any]] = []
@@ -434,6 +550,37 @@ class TimetoscoreClient:
             apply_result(str(game.get("home_team_id", "")), str(game.get("home_team", "")), home_goals, away_goals)
 
     def division_stats(self, season: str, level: str, conf: str = "0", stat_class: str = "1") -> dict[str, Any]:
+        try:
+            resolved_season = self.current_season_id() if str(season) == "0" else str(season)
+            skater_payload = self.api(
+                "get_skaters",
+                {
+                    "league_id": LEAGUE_ID,
+                    "season_id": resolved_season,
+                    "stat_class": stat_class,
+                    "level_id": level,
+                    "conf_id": conf,
+                },
+            )
+            goalie_payload = self.api(
+                "get_goalies",
+                {
+                    "league_id": LEAGUE_ID,
+                    "season_id": resolved_season,
+                    "stat_class": stat_class,
+                    "level_id": level,
+                    "conf_id": conf,
+                },
+            )
+            result = {
+                "players": normalize_api_skaters(skater_payload, context={"level": level, "conf": conf}),
+                "goalies": normalize_api_goalies(goalie_payload, context={"level": level, "conf": conf}),
+            }
+            result["players"] = remove_goalie_overlap_from_skaters(result["players"], result["goalies"])
+            return result
+        except RuntimeError:
+            pass
+
         tables = self.tables(
             "display-league-stats",
             {"stat_class": stat_class, "league": LEAGUE_ID, "season": season, "level": level, "conf": conf},
@@ -586,6 +733,28 @@ class TimetoscoreClient:
         return self._cache_set(cache_key, payload)
 
     def schedule(self, season: str = "0", team: str | None = None, level: str | None = None, conf: str | None = None) -> dict[str, Any]:
+        try:
+            resolved_season = self.current_season_id() if str(season) == "0" else str(season)
+            payload = self.api(
+                "get_schedule_lite",
+                {
+                    "league_id": LEAGUE_ID,
+                    "season_id": resolved_season,
+                    "level_id": level,
+                    "conf_id": conf,
+                    "team_id": team,
+                },
+            )
+            divisions = self.standings(season).get("divisions", [])
+            return {
+                "season": resolved_season,
+                "team": team,
+                "level": level,
+                "games": normalize_api_schedule(payload, resolved_season, divisions),
+            }
+        except RuntimeError:
+            pass
+
         params: dict[str, str | int | None] = {"stat_class": 1, "league": LEAGUE_ID, "season": season}
         if team:
             params["team"] = team
@@ -643,6 +812,247 @@ class TimetoscoreClient:
             names.append(payload["players"][0].get("team", ""))
         payload["team_name"] = clean_text(names[0]) if names else ""
         return payload
+
+
+def api_value(source: dict[str, Any], keys: list[str], default: Any = "") -> Any:
+    for key in keys:
+        value = source.get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
+def api_int(source: dict[str, Any], keys: list[str]) -> int | None:
+    return int_or_none(str(api_value(source, keys)))
+
+
+def api_float(source: dict[str, Any], keys: list[str]) -> float | None:
+    return float_or_none(str(api_value(source, keys)))
+
+
+def normalize_api_standings(payload: dict[str, Any], requested_season: str, seasons: list[dict[str, Any]]) -> dict[str, Any]:
+    standings = payload.get("standings") if isinstance(payload.get("standings"), dict) else {}
+    leagues = standings.get("leagues") if isinstance(standings.get("leagues"), list) else []
+    if not leagues:
+        raise RuntimeError("TimeToScore API get_standings returned no standings")
+    league = leagues[0]
+    resolved_season = str(league.get("season") or requested_season)
+    divisions: list[dict[str, Any]] = []
+
+    for level in league.get("levels", []):
+        if not isinstance(level, dict):
+            continue
+        level_id = str(level.get("id") or level.get("level_id") or "")
+        level_name = clean_text(str(level.get("name") or level.get("level_name") or "Division"))
+        conferences = level.get("conferences") if isinstance(level.get("conferences"), list) else []
+        if not conferences:
+            conferences = [{"id": "0", "teams": []}]
+        for conference in conferences:
+            if not isinstance(conference, dict):
+                continue
+            conf_id = str(conference.get("id") if conference.get("id") not in (None, "") else "0")
+            conf_name = clean_text(str(conference.get("conf_name") or conference.get("name") or ""))
+            division_name = f"{level_name} {conf_name}".strip()
+            teams = []
+            for team in conference.get("teams", []):
+                if not isinstance(team, dict):
+                    continue
+                name = clean_text(str(team.get("team_name") or team.get("name") or ""))
+                goals_for = api_int(team, ["goals_for"])
+                goals_against = api_int(team, ["goals_against"])
+                goal_diff = api_int(team, ["plusminus"])
+                if goal_diff is None and goals_for is not None and goals_against is not None:
+                    goal_diff = goals_for - goals_against
+                teams.append(
+                    {
+                        "id": str(team.get("id") or team.get("team_id") or ""),
+                        "name": name,
+                        "slug": slugify(name),
+                        "schedule_url": absolutize(f"/test/schedule.php?league={LEAGUE_ID}&team={team.get('id') or team.get('team_id') or ''}"),
+                        "gp": api_int(team, ["games_played"]),
+                        "wins": api_int(team, ["wins", "total_wins"]),
+                        "losses": api_int(team, ["losses"]),
+                        "ties": api_int(team, ["ties"]),
+                        "points": api_int(team, ["pts", "points"]),
+                        "games_remaining": api_int(team, ["games_remaining"]),
+                        "goals_for": goals_for or 0,
+                        "goals_against": goals_against or 0,
+                        "goal_diff": goal_diff or 0,
+                        "division": division_name,
+                        "level": level_id,
+                        "conf": conf_id,
+                    }
+                )
+            divisions.append(
+                {
+                    "id": f"{level_id}:{conf_id}",
+                    "name": division_name,
+                    "level": level_id,
+                    "conf": conf_id,
+                    "season": resolved_season,
+                    "schedule_url": absolutize(f"/test/schedule.php?league={LEAGUE_ID}&season={resolved_season}&level={level_id}&conf={conf_id}"),
+                    "stats_url": absolutize(f"/test/skater-leaders.php?league={LEAGUE_ID}&season={resolved_season}&level={level_id}"),
+                    "teams": teams,
+                }
+            )
+
+    return {
+        "league_id": LEAGUE_ID,
+        "requested_season": requested_season,
+        "season": resolved_season,
+        "history_start_year": HISTORY_START_YEAR,
+        "seasons": seasons,
+        "divisions": divisions,
+    }
+
+
+def normalize_api_player_team_rows(player: dict[str, Any]) -> list[dict[str, Any]]:
+    teams = player.get("teams")
+    if isinstance(teams, list) and teams:
+        return [team for team in teams if isinstance(team, dict)]
+    return [player]
+
+
+def normalize_api_skaters(payload: dict[str, Any], context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    context = context or {}
+    skaters = payload.get("skaters") if isinstance(payload.get("skaters"), list) else []
+    rows: list[dict[str, Any]] = []
+    for player in skaters:
+        if not isinstance(player, dict):
+            continue
+        name = display_person_name(str(player.get("player_name") or ""))
+        if not name:
+            continue
+        for team_stats in normalize_api_player_team_rows(player):
+            team_name = clean_text(str(api_value(team_stats, ["team_name", "team_ab"], api_value(player, ["team_name", "team_ab"]))))
+            row = {
+                **context,
+                "name": name,
+                "team": team_name,
+                "team_id": str(api_value(team_stats, ["team_id"], api_value(player, ["team_id"], ""))),
+                "number": clean_text(str(api_value(team_stats, ["jersey"], api_value(player, ["jersey"], "")))),
+                "position": clean_text(str(api_value(team_stats, ["position"], api_value(player, ["position"], "")))),
+                "gp": api_int(team_stats, ["games_played"]) or 0,
+                "goals": api_int(team_stats, ["goals"]) or 0,
+                "assists": api_int(team_stats, ["assists"]) or 0,
+                "points": api_int(team_stats, ["points"]) or 0,
+                "plus_minus": api_int(team_stats, ["plusminus"]) or 0,
+                "pims": api_int(team_stats, ["pims"]) or 0,
+                "hat": api_int(team_stats, ["hat", "hat_tricks"]) or 0,
+                "shots": api_int(team_stats, ["sog", "shots"]) if api_int(team_stats, ["sog", "shots"]) is not None else "-",
+                "points_per_game": api_float(team_stats, ["point_per_game", "points_per_game"]) or 0,
+                "ppg": api_int(team_stats, ["ppg"]) or 0,
+                "ppa": api_int(team_stats, ["ppa"]) or 0,
+                "shg": api_int(team_stats, ["shg"]) or 0,
+                "sha": api_int(team_stats, ["sha"]) or 0,
+                "gwg": api_int(team_stats, ["gwg"]) or 0,
+                "otg": api_int(team_stats, ["otg"]) or 0,
+                "player_id": str(api_value(player, ["player_id"], slugify(f"{name} {team_name}"))),
+            }
+            rows.append(row)
+    return rows
+
+
+def normalize_api_goalies(payload: dict[str, Any], context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    context = context or {}
+    goalies = payload.get("goalies") if isinstance(payload.get("goalies"), list) else []
+    rows: list[dict[str, Any]] = []
+    for player in goalies:
+        if not isinstance(player, dict):
+            continue
+        name = display_person_name(str(player.get("player_name") or ""))
+        if not name:
+            continue
+        for team_stats in normalize_api_player_team_rows(player):
+            team_name = clean_text(str(api_value(team_stats, ["team_name", "team_ab"], api_value(player, ["team_name", "team_ab"]))))
+            row = {
+                **context,
+                "name": name,
+                "team": team_name,
+                "team_id": str(api_value(team_stats, ["team_id"], api_value(player, ["team_id"], ""))),
+                "number": clean_text(str(api_value(team_stats, ["jersey"], api_value(player, ["jersey"], "")))),
+                "position": "G",
+                "gp": api_int(team_stats, ["goalie_games_played", "goalie_games", "games_played"]) or 0,
+                "wins": api_int(team_stats, ["wins"]) or 0,
+                "losses": api_int(team_stats, ["losses"]) or 0,
+                "ties": api_int(team_stats, ["so_ties", "ties"]) or 0,
+                "overtime_losses": api_int(team_stats, ["ot_losses", "otlosses"]) or 0,
+                "shots": api_int(team_stats, ["shots_against", "shots"]) or 0,
+                "saves": api_int(team_stats, ["saves"]) or 0,
+                "goals_against": api_int(team_stats, ["goals_against"]) or 0,
+                "goals_against_average": api_float(team_stats, ["goals_against_ave", "goals_against_average"]) or 0,
+                "save_pct": api_float(team_stats, ["save_pct"]) or 0,
+                "shutouts": api_int(team_stats, ["shutouts"]) or 0,
+                "pims": api_int(team_stats, ["pims"]) or 0,
+                "time_on_ice": clean_text(str(api_value(team_stats, ["toi"], ""))),
+                "player_id": str(api_value(player, ["player_id"], slugify(f"{name} {team_name} goalie"))),
+            }
+            rows.append(row)
+    return rows
+
+
+def format_api_schedule_date(value: Any) -> str:
+    text = clean_text(str(value or ""))
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d")
+        return f"{parsed.strftime('%a %b')} {parsed.day}"
+    except ValueError:
+        return text
+
+
+def normalize_api_schedule(payload: dict[str, Any], season: str, divisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    games = payload.get("games") if isinstance(payload.get("games"), list) else []
+    team_context_by_id: dict[str, dict[str, Any]] = {}
+    team_context_by_name: dict[str, dict[str, Any]] = {}
+    for division in divisions:
+        for team in division.get("teams", []):
+            context = {"division": division.get("name", ""), "level": division.get("level", ""), "conf": division.get("conf", "")}
+            team_id = str(team.get("id", ""))
+            team_name = clean_text(str(team.get("name", "")))
+            if team_id:
+                team_context_by_id[team_id] = context
+            if team_name:
+                team_context_by_name[normalize_name(team_name)] = context
+
+    normalized: list[dict[str, Any]] = []
+    for game in games:
+        if not isinstance(game, dict):
+            continue
+        away_team = clean_text(str(game.get("away_team") or ""))
+        home_team = clean_text(str(game.get("home_team") or ""))
+        away_id = str(game.get("away_id") or "")
+        home_id = str(game.get("home_id") or "")
+        away_context = team_context_by_id.get(away_id) or team_context_by_name.get(normalize_name(away_team), {})
+        home_context = team_context_by_id.get(home_id) or team_context_by_name.get(normalize_name(home_team), {})
+        level_name = away_context.get("division") or home_context.get("division") or ""
+        away_goals = int_or_none(str(game.get("away_goals", "")))
+        home_goals = int_or_none(str(game.get("home_goals", "")))
+        final = clean_text(str(game.get("result_string") or game.get("game_status") or "")).casefold() in {"final", "closed"} or (
+            away_goals is not None and home_goals is not None
+        )
+        game_id = clean_text(str(game.get("game_id") or ""))
+        normalized.append(
+            {
+                "game_id": game_id,
+                "final": final,
+                "date": format_api_schedule_date(game.get("date")),
+                "time": clean_text(str(game.get("formatted_time") or game.get("time") or "")),
+                "rink": clean_text(str(game.get("location") or "")),
+                "league": LEAGUE_ID,
+                "level": level_name,
+                "away_team": away_team,
+                "away_team_id": away_id,
+                "away_goals": away_goals,
+                "home_team": home_team,
+                "home_team_id": home_id,
+                "home_goals": home_goals,
+                "type": clean_text(str(game.get("gtype_name") or "")),
+                "game_center_url": absolutize(f"/oss-scoresheet?game_id={game_id}&mode=display") if game_id else None,
+                "scorecard_url": absolutize(f"/generate-scorecard.php?game_id={game_id}") if game_id else None,
+                "season": season,
+            }
+        )
+    return normalized
 
 
 def normalize_header(value: str) -> str:
