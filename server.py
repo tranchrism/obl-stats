@@ -757,6 +757,7 @@ class TimetoscoreClient:
         return self._cache_set(cache_key, payload)
 
     def schedule(self, season: str = "0", team: str | None = None, level: str | None = None, conf: str | None = None) -> dict[str, Any]:
+        api_error: RuntimeError | None = None
         try:
             resolved_season = self.current_season_id() if str(season) == "0" else str(season)
             payload = self.api(
@@ -776,8 +777,8 @@ class TimetoscoreClient:
                 "level": level,
                 "games": normalize_api_schedule(payload, resolved_season, divisions),
             }
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            api_error = exc
 
         params: dict[str, str | int | None] = {"stat_class": 1, "league": LEAGUE_ID, "season": season}
         if team:
@@ -791,6 +792,8 @@ class TimetoscoreClient:
             title = table[0][0].text if table and table[0] else ""
             if title == "Game Results":
                 games.extend(parse_games_table(table))
+        if api_error and not games and not team and not level:
+            raise RuntimeError(f"Could not fetch schedule for season {season}: {api_error}") from api_error
         return {"season": season, "team": team, "level": level, "games": games}
 
     def team(self, season: str, team_id: str, stat_class: str = "1") -> dict[str, Any]:

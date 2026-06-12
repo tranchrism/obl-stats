@@ -271,6 +271,7 @@ def export_site(
     exported_division_keys: set[tuple[str, str, str, str]] = set()
     division_context: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     exported_schedule_ids: set[str] = set()
+    schedule_aliases: dict[str, str] = {}
 
     for requested_season in requested_season_ids:
         standings = client.standings(requested_season)
@@ -285,7 +286,10 @@ def export_site(
             }
         standings_by_request[requested_season] = standings
         write_json(standings_dir / f"{requested_season}.json", standings)
-        exported_schedule_ids.add(str(standings.get("season", requested_season)))
+        resolved_schedule_id = str(standings.get("season", requested_season))
+        exported_schedule_ids.add(resolved_schedule_id)
+        if requested_season != resolved_schedule_id:
+            schedule_aliases[requested_season] = resolved_schedule_id
 
         for division in standings.get("divisions", []):
             division_season = str(division.get("season", standings.get("season", requested_season)))
@@ -321,6 +325,9 @@ def export_site(
     )
     for season_id, schedule in schedules.items():
         write_json(schedule_dir / f"{season_id}.json", schedule)
+    for alias_id, season_id in schedule_aliases.items():
+        if season_id in schedules:
+            write_json(schedule_dir / f"{alias_id}.json", schedules[season_id])
     for (season_id, team_id), payload in team_payloads.items():
         team = team_context.get((season_id, team_id), {})
         payload["games"] = [
@@ -393,7 +400,8 @@ def export_site(
         "requested_seasons": requested_season_ids,
         "standings_files": len(standings_by_request),
         "division_stat_files": len(exported_division_keys),
-        "schedule_files": len(exported_schedule_ids),
+        "schedule_files": len(exported_schedule_ids) + len(schedule_aliases),
+        "schedule_aliases": schedule_aliases,
         "team_files": len(team_payloads),
         "player_profile_names": len(all_names),
         "player_profile_files": profile_files,
