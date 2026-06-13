@@ -253,14 +253,14 @@ input::placeholder {
 
 .hero-tab::after {
   background: #f7b100;
-  bottom: -42%;
   content: "";
   display: block;
-  height: 6px;
+  height: 5px;
   left: 8%;
   opacity: 0;
   position: absolute;
   right: 8%;
+  top: 45%;
   transform: scaleX(0.7);
   transition: opacity 160ms ease, transform 160ms ease;
 }
