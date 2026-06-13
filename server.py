@@ -28,6 +28,8 @@ API_BOOTSTRAP_PATH = "test/site.php"
 LEAGUE_ID = "27"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 HISTORY_START_YEAR = 2015
+API_MIN_INTERVAL_SECONDS = 0.25
+API_RATE_LIMIT_RETRY_SECONDS = 12
 GAME_CENTER_PATH = "/get_game_center"
 GAME_CENTER_BOOTSTRAP_URL = urljoin(BASE_URL, "oss-scoresheet")
 GAME_CENTER_SCHEMA_VERSION = 2
@@ -225,6 +227,8 @@ class TimetoscoreClient:
         self._game_center_config_error: str | None = None
         self._game_center_config_error_at = 0.0
         self._api_lock = RLock()
+        self._api_request_lock = RLock()
+        self._last_api_request_at = 0.0
         self._api_cookiejar = http.cookiejar.CookieJar()
         self._api_opener = build_opener(HTTPCookieProcessor(self._api_cookiejar))
         self._api_proxy_session: str | None = None
@@ -314,6 +318,13 @@ class TimetoscoreClient:
             self._api_proxy_session = match.group(1)
             return self._api_proxy_session
 
+    def api_throttle(self) -> None:
+        with self._api_request_lock:
+            elapsed = time.time() - self._last_api_request_at
+            if elapsed < API_MIN_INTERVAL_SECONDS:
+                time.sleep(API_MIN_INTERVAL_SECONDS - elapsed)
+            self._last_api_request_at = time.time()
+
     def api(self, endpoint: str, params: dict[str, str | int | None], retry: bool = True) -> dict[str, Any]:
         clean_params = {
             key: str(value)
@@ -337,11 +348,16 @@ class TimetoscoreClient:
             },
         )
         try:
+            self.api_throttle()
             with self._api_opener.open(req, timeout=20) as response:
                 payload = json.loads(response.read().decode("utf-8", errors="replace"))
         except HTTPError as exc:
             if retry and exc.code == HTTPStatus.UNAUTHORIZED:
                 self._api_proxy_session = None
+                return self.api(endpoint, params, retry=False)
+            if retry and exc.code == HTTPStatus.TOO_MANY_REQUESTS:
+                retry_after = int_or_none(exc.headers.get("Retry-After", "")) or API_RATE_LIMIT_RETRY_SECONDS
+                time.sleep(max(retry_after, API_RATE_LIMIT_RETRY_SECONDS))
                 return self.api(endpoint, params, retry=False)
             raise RuntimeError(f"TimeToScore API {endpoint} returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
