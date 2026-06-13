@@ -211,6 +211,7 @@ class TimetoscoreClient:
         self._warm_lock = RLock()
         self._warming: set[str] = set()
         self._game_center_config: dict[str, str] | None = None
+        self._game_center_config_error: str | None = None
         self._api_cookiejar = http.cookiejar.CookieJar()
         self._api_opener = build_opener(HTTPCookieProcessor(self._api_cookiejar))
         self._api_proxy_session: str | None = None
@@ -346,6 +347,8 @@ class TimetoscoreClient:
     def game_center_config(self, game_id: str) -> dict[str, str]:
         if self._game_center_config:
             return self._game_center_config
+        if self._game_center_config_error:
+            raise RuntimeError(self._game_center_config_error)
         html = self.fetch_url(f"{GAME_CENTER_BOOTSTRAP_URL}?{urlencode({'game_id': game_id, 'mode': 'display'})}")
         config: dict[str, str] = {}
         for key in ("username", "secret", "api_url", "league_id"):
@@ -354,7 +357,8 @@ class TimetoscoreClient:
                 config[key] = match.group(1)
         missing = {"username", "secret", "api_url", "league_id"} - set(config)
         if missing:
-            raise RuntimeError(f"Could not read TimeToScore game-center config: missing {', '.join(sorted(missing))}")
+            self._game_center_config_error = f"Could not read TimeToScore game-center config: missing {', '.join(sorted(missing))}"
+            raise RuntimeError(self._game_center_config_error)
         self._game_center_config = config
         return config
 
