@@ -724,8 +724,12 @@ function renderSchedule() {
       if (state.scheduleMode === "upcoming") return !game.final;
       return true;
     })
-    .filter((game) => state.scheduleDivisionFilter === "all" || game.level === state.scheduleDivisionFilter)
-    .filter((game) => state.scheduleTeamFilter === "all" || game.away_team === state.scheduleTeamFilter || game.home_team === state.scheduleTeamFilter);
+    .filter((game) => {
+      if (state.scheduleTeamFilter !== "all") {
+        return game.away_team === state.scheduleTeamFilter || game.home_team === state.scheduleTeamFilter;
+      }
+      return state.scheduleDivisionFilter === "all" || game.level === state.scheduleDivisionFilter;
+    });
 
   renderNextScheduledGame(games);
   $("#scheduleList").innerHTML = games.length
@@ -793,7 +797,6 @@ function scheduleRouteUrlForTeam(team) {
   if (existing.get("data") === "static") params.set("data", "static");
   params.set("view", "schedule");
   if (currentSeasonParam() !== "current") params.set("season", currentSeasonParam());
-  if (team?.division) params.set("division", slugify(team.division));
   if (team?.name) params.set("team", teamSlug(team));
   return `${window.location.pathname}?${params.toString()}`;
 }
