@@ -15,6 +15,7 @@ const state = {
   schedule: [],
   teams: [],
   leaderMode: "players",
+  leaderDivisionFilter: "all",
   leaderSortDirection: "desc",
   scheduleMode: "all",
   scheduleDivisionFilter: "all",
@@ -211,15 +212,16 @@ async function resolveRouteSeason() {
 
 function resolveRouteControls() {
   const route = state.routeParams || {};
+  const divisions = state.standings?.divisions || [];
+  const routeDivision = route.division ? divisions.find((division) => slugMatches(divisionSlug(division), route.division) || division.id === route.division) : null;
   if (route.sort && $("#leaderSort")) {
     $("#leaderSort").value = route.sort;
   }
   if (state.view === "leaders") {
+    state.leaderDivisionFilter = routeDivision?.id || "all";
     renderLeaders();
     return;
   }
-  const divisions = state.standings?.divisions || [];
-  const routeDivision = route.division ? divisions.find((division) => slugMatches(divisionSlug(division), route.division) || division.id === route.division) : null;
   if (state.view === "schedule") {
     const scheduleDivision = route.division
       ? Array.from(new Set(state.schedule.map((game) => game.level).filter(Boolean))).find((division) => slugMatches(division, route.division) || division === route.division)
@@ -273,6 +275,8 @@ function currentRouteUrl() {
 
   if (state.view === "leaders") {
     if (state.leaderMode !== "players") params.set("leader", state.leaderMode);
+    const division = (state.standings?.divisions || []).find((entry) => entry.id === state.leaderDivisionFilter);
+    if (division) params.set("division", divisionSlug(division));
     const sort = $("#leaderSort")?.value;
     if (sort) params.set("sort", sort);
     if (state.leaderSortDirection !== "desc") params.set("dir", state.leaderSortDirection);
@@ -461,6 +465,7 @@ function signedNumber(value) {
 function renderLeaders() {
   const query = normalize($("#leaderSearch").value);
   const mode = state.leaderMode;
+  renderLeaderDivisionFilter();
   const allowedSorts = mode === "players" ? ["points", "division", "name", "team", "gp", "goals", "assists", "pims", "points_per_game"] : ["save_pct", "division", "name", "team", "gp", "shots", "goals_against", "goals_against_average", "shutouts"];
   const currentSort = $("#leaderSort").value;
   const sort = allowedSorts.includes(currentSort) ? currentSort : allowedSorts[0];
@@ -468,6 +473,7 @@ function renderLeaders() {
   const sortDirection = state.leaderSortDirection;
   const divisionRanks = new Map((state.standings?.divisions || []).map((division, index) => [division.id, index]));
   const rows = (mode === "players" ? allPlayers() : allGoalies())
+    .filter((row) => state.leaderDivisionFilter === "all" || row.division_id === state.leaderDivisionFilter)
     .filter((row) => !query || normalize(`${row.name} ${row.team} ${row.division}`).includes(query))
     .sort((a, b) => compareLeaderRows(a, b, sort, mode, divisionRanks, sortDirection));
 
@@ -500,6 +506,17 @@ function renderLeaders() {
           ["save_pct", "Save %"],
           ["shutouts", "SO"],
         ], { sortable: true, activeSort: sort, sortDirection });
+}
+
+function renderLeaderDivisionFilter() {
+  const divisions = state.standings?.divisions || [];
+  if (state.leaderDivisionFilter !== "all" && !divisions.some((division) => division.id === state.leaderDivisionFilter)) {
+    state.leaderDivisionFilter = "all";
+  }
+  $("#leaderDivisionSelect").innerHTML = [
+    `<option value="all">All divisions</option>`,
+    ...divisions.map((division) => `<option value="${escapeAttr(division.id)}" ${division.id === state.leaderDivisionFilter ? "selected" : ""}>${division.name}</option>`),
+  ].join("");
 }
 
 function sortOptions(keys, selected) {
@@ -1454,6 +1471,7 @@ function bindEvents() {
     state.requestedSeason = event.target.value;
     state.routeParams = {};
     state.divisionStats.clear();
+    state.leaderDivisionFilter = "all";
     state.scheduleDivisionFilter = "all";
     state.scheduleTeamFilter = "all";
     state.playerDivisionFilter = "all";
@@ -1619,6 +1637,11 @@ function bindEvents() {
   });
   $("#openSelectedTeam").addEventListener("click", () => openTeam(state.teamPickerTeam));
   $("#leaderSearch").addEventListener("input", renderLeaders);
+  $("#leaderDivisionSelect").addEventListener("change", (event) => {
+    state.leaderDivisionFilter = event.target.value;
+    renderLeaders();
+    updateRoute();
+  });
   $("#leaderSort").addEventListener("change", (event) => {
     state.leaderSortDirection = defaultLeaderSortDirection(event.target.value);
     renderLeaders();
