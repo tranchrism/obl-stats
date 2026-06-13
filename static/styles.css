@@ -396,6 +396,31 @@ main {
   align-items: start;
 }
 
+.player-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.share-profile-button {
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 0.72rem;
+  font-weight: 760;
+  min-height: 30px;
+  padding: 0 11px;
+}
+
+.share-profile-button:hover,
+.share-profile-button:focus-visible {
+  background: var(--gold);
+  border-color: var(--gold);
+  outline: 0;
+}
+
 .profile-scope-controls {
   display: grid;
   gap: 10px;

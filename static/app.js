@@ -185,11 +185,14 @@ function applyRouteFromUrl() {
     team: params.get("team") || "",
     scheduleTeam: params.get("scheduleTeam") || "",
     name: params.get("name") || "",
+    player: params.get("player") || "",
+    playerTeam: params.get("playerTeam") || "",
     sort: params.get("sort") || "",
   };
   state.leaderMode = routeValue(params.get("leader"), ["players", "goalies"], "players");
   state.leaderSortDirection = routeValue(params.get("dir"), ["asc", "desc"], "desc");
   state.scheduleMode = routeValue(params.get("mode"), ["all", "final", "upcoming"], "all");
+  state.playerSeasonType = routeValue(params.get("playerSplit"), ["regular", "playoffs"], "regular");
 }
 
 async function resolveRouteSeason() {
@@ -260,13 +263,35 @@ function resolveRouteControls() {
   }
 }
 
+async function openRoutedPlayer() {
+  const route = state.routeParams || {};
+  if (!route.player) return;
+  const player = findRoutedPlayer(route.player, route.playerTeam);
+  if (!player) return;
+  await openPlayer(player.name, player.team_id || "");
+}
+
+function findRoutedPlayer(playerSlug, teamSlugValue = "") {
+  const candidates = [...allPlayers(), ...allGoalies()].filter((player) => slugMatches(profileSlug(player.name), playerSlug));
+  if (!candidates.length) return null;
+  if (!teamSlugValue) return candidates[0];
+  return (
+    candidates.find((player) => slugMatches(teamSlug(player.team), teamSlugValue) || player.team_id === teamSlugValue) ||
+    candidates.find((player) => {
+      const team = state.teams.find((entry) => entry.id === player.team_id);
+      return team && slugMatches(teamSlug(team), teamSlugValue);
+    }) ||
+    candidates[0]
+  );
+}
+
 function currentSeasonParam() {
   const seasons = state.standings?.seasons || [];
   const selected = seasons.find((season) => season.id === state.requestedSeason || (state.requestedSeason === "0" && season.current));
   return seasonSlug(selected || { id: state.season, name: state.season });
 }
 
-function currentRouteUrl() {
+function currentRouteUrl(options = {}) {
   const params = new URLSearchParams();
   const existing = new URLSearchParams(window.location.search);
   if (existing.get("data") === "static") params.set("data", "static");
@@ -298,6 +323,12 @@ function currentRouteUrl() {
     if (division) params.set("division", divisionSlug(division));
     if (team) params.set("team", teamSlug(team));
     if (state.playerNameFilter !== "all") params.set("name", profileSlug(state.playerNameFilter));
+  }
+  if ((options.includePlayer || state.routeParams?.player) && state.selectedPlayer) {
+    params.set("player", profileSlug(state.selectedPlayer.name));
+    const playerTeam = playerShareTeam(state.selectedPlayer);
+    if (playerTeam) params.set("playerTeam", teamSlug(playerTeam));
+    if (state.playerSeasonType !== "regular") params.set("playerSplit", state.playerSeasonType);
   }
   const query = params.toString();
   return `${window.location.pathname}${query ? `?${query}` : ""}`;
@@ -364,6 +395,7 @@ async function loadApp(force = false) {
     renderPlayers();
     switchView(state.view, { updateRoute: false });
     resolveRouteControls();
+    await openRoutedPlayer();
     prewarmPlayerHistory();
     updateRoute({ replace: true });
     showStatus("");
@@ -1219,12 +1251,20 @@ function renderPlayerProfileInto(panel, profile, splitSelectId, titleId = "") {
   const divisionSelectId = `${splitSelectId}Division`;
   const teamSelectId = `${splitSelectId}Team`;
   const titleAttribute = titleId ? ` id="${titleId}"` : "";
+  const titleMarkup = titleId
+    ? `
+        <div class="player-title-row">
+          <h2${titleAttribute}>${escapeAttr(profile.name)}</h2>
+          <button class="share-profile-button" data-share-player type="button" aria-label="Copy share link for ${escapeAttr(profile.name)}">Share</button>
+        </div>
+      `
+    : `<h2${titleAttribute}>${escapeAttr(profile.name)}</h2>`;
   const availableSplits = profile.available_splits?.length ? profile.available_splits : ["regular", "playoffs"];
   panel.innerHTML = `
     <header class="player-hero">
       <div>
         <p class="eyebrow">Player Profile</p>
-        <h2${titleAttribute}>${profile.name}</h2>
+        ${titleMarkup}
         <p>${number(latest.team)}${latest.division ? ` / ${latest.division}` : ""} · ${profile.history_start_year || state.historyStartYear} onward</p>
       </div>
       <label class="split-control">
@@ -1286,6 +1326,51 @@ function renderPlayerProfileInto(panel, profile, splitSelectId, titleId = "") {
     state.playerProfileTeamFilter = event.target.value;
     renderPlayerProfileInto(panel, profile, splitSelectId, titleId);
   });
+}
+
+function playerShareUrl(profile = state.selectedPlayer) {
+  if (!profile) return "";
+  const path = currentRouteUrl({ includePlayer: true });
+  return new URL(path, window.location.origin).href;
+}
+
+function playerShareTeam(profile = state.selectedPlayer) {
+  if (!profile) return null;
+  const latest = latestProfileRow(profile.skater_seasons || [], profile.goalie_seasons || []) || {};
+  const teamId = profile.team_id || latest.team_id || "";
+  return state.teams.find((team) => team.id === teamId) || latest.team || null;
+}
+
+async function copyPlayerShareLink(button) {
+  const url = playerShareUrl();
+  if (!url) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = url;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+    }
+    flashShareButton(button, "Copied");
+  } catch (error) {
+    flashShareButton(button, "Copy failed");
+  }
+}
+
+function flashShareButton(button, label) {
+  if (!button) return;
+  const original = button.textContent;
+  button.textContent = label;
+  window.setTimeout(() => {
+    button.textContent = original || "Share";
+  }, 1400);
 }
 
 function latestProfileRow(skaterRows, goalieRows) {
@@ -1416,9 +1501,16 @@ function renderPlayerDrawerError(message) {
 function closePlayerDrawer(options = {}) {
   const drawer = $("#playerDrawer");
   activePlayerRequest += 1;
+  const shouldRemovePlayerRoute = !options.immediate && Boolean(state.routeParams?.player);
+  if (!options.immediate) {
+    state.selectedPlayer = null;
+    state.routeParams.player = "";
+    state.routeParams.playerTeam = "";
+  }
   drawer.classList.remove("is-open");
   drawer.setAttribute("aria-hidden", "true");
   document.body.classList.remove("drawer-open");
+  if (shouldRemovePlayerRoute) updateRoute({ replace: true });
   if (options.immediate) {
     drawer.hidden = true;
     return;
@@ -1536,6 +1628,12 @@ function bindEvents() {
   });
 
   document.addEventListener("click", (event) => {
+    const sharePlayer = event.target.closest("[data-share-player]");
+    if (sharePlayer) {
+      copyPlayerShareLink(sharePlayer);
+      return;
+    }
+
     const leaderMode = event.target.closest("[data-leader-mode]");
     if (leaderMode) {
       state.leaderMode = leaderMode.dataset.leaderMode;
