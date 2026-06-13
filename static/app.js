@@ -234,6 +234,7 @@ function resolveRouteControls() {
     state.scheduleTeamFilter = scheduleTeam
       ? scheduleTeamsForDivision(state.scheduleDivisionFilter).find((team) => slugMatches(team, scheduleTeam) || team === scheduleTeam) || "all"
       : "all";
+    syncScheduleModeButtons();
     renderScheduleFilters();
     renderSchedule();
     return;
@@ -726,9 +727,75 @@ function renderSchedule() {
     .filter((game) => state.scheduleDivisionFilter === "all" || game.level === state.scheduleDivisionFilter)
     .filter((game) => state.scheduleTeamFilter === "all" || game.away_team === state.scheduleTeamFilter || game.home_team === state.scheduleTeamFilter);
 
+  renderNextScheduledGame(games);
   $("#scheduleList").innerHTML = games.length
     ? games.map(renderGame).join("")
     : `<div class="empty">No games match that filter.</div>`;
+}
+
+function renderNextScheduledGame(games) {
+  const card = $("#nextGameCard");
+  const shouldShow = state.scheduleMode === "all" && state.scheduleTeamFilter !== "all";
+  if (!shouldShow) {
+    card.hidden = true;
+    card.innerHTML = "";
+    return;
+  }
+
+  const nextGame = games.find((game) => !game.final);
+  card.hidden = false;
+  card.innerHTML = nextGame ? renderNextGameCard(nextGame) : renderNoNextGameCard(state.scheduleTeamFilter);
+}
+
+function renderNextGameCard(game, selectedTeam = state.scheduleTeamFilter, options = {}) {
+  const isHome = game.home_team === selectedTeam;
+  const opponent = isHome ? game.away_team : game.home_team;
+  const matchupLabel = isHome ? `${selectedTeam} vs ${opponent}` : `${selectedTeam} at ${opponent}`;
+  return `
+    <article>
+      <div>
+        <p class="eyebrow">Next Scheduled Game</p>
+        <h3>${escapeAttr(matchupLabel)}</h3>
+      </div>
+      <div class="next-game-details">
+        <span>${escapeAttr(game.date)}</span>
+        <span>${escapeAttr(game.time)}</span>
+        <span>${escapeAttr(game.rink)}</span>
+        <span>${escapeAttr(game.level)}</span>
+        ${options.scheduleHref ? `<a class="next-game-link" href="${escapeAttr(options.scheduleHref)}">View full schedule</a>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function renderNoNextGameCard(teamName = state.scheduleTeamFilter, options = {}) {
+  return `
+    <article>
+      <div>
+        <p class="eyebrow">Next Scheduled Game</p>
+        <h3>No upcoming game scheduled</h3>
+      </div>
+      <div class="next-game-details">
+        <span>${escapeAttr(teamName)}</span>
+        ${options.scheduleHref ? `<a class="next-game-link" href="${escapeAttr(options.scheduleHref)}">View full schedule</a>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+function nextGameForTeam(teamName) {
+  return state.schedule.find((game) => !game.final && (game.away_team === teamName || game.home_team === teamName));
+}
+
+function scheduleRouteUrlForTeam(team) {
+  const params = new URLSearchParams();
+  const existing = new URLSearchParams(window.location.search);
+  if (existing.get("data") === "static") params.set("data", "static");
+  params.set("view", "schedule");
+  if (currentSeasonParam() !== "current") params.set("season", currentSeasonParam());
+  if (team?.division) params.set("division", slugify(team.division));
+  if (team?.name) params.set("team", teamSlug(team));
+  return `${window.location.pathname}?${params.toString()}`;
 }
 
 function renderScheduleFilters() {
@@ -751,6 +818,10 @@ function renderScheduleFilters() {
     `<option value="all">All teams</option>`,
     ...teams.map((team) => `<option value="${escapeAttr(team)}" ${team === state.scheduleTeamFilter ? "selected" : ""}>${team}</option>`),
   ].join("");
+}
+
+function syncScheduleModeButtons() {
+  $$("#scheduleMode button").forEach((button) => button.classList.toggle("is-active", button.dataset.scheduleMode === state.scheduleMode));
 }
 
 function scheduleTeamsForDivision(division) {
@@ -993,6 +1064,8 @@ function renderTeamDetail() {
   const goalieColumns = [["name", "Goalie"], ["number", "#"], ["gp", "GP"], ["shots", "Shots"], ["goals_against", "GA"], ["goals_against_average", "GAA"], ["save_pct", "Save %"], ["wins", "W"]];
   const skaters = sortTeamRows(detail.players || [], state.teamSkaterSort, state.teamSkaterSortDirection);
   const goalies = sortTeamRows(detail.goalies || [], state.teamGoalieSort, state.teamGoalieSortDirection);
+  const nextTeamGame = nextGameForTeam(selected.name);
+  const teamScheduleHref = scheduleRouteUrlForTeam(selected);
   const panel = $("#teamDetail");
   panel.hidden = false;
   panel.innerHTML = `
@@ -1009,6 +1082,13 @@ function renderTeamDetail() {
         <div class="metric"><span class="label">Games</span><span class="value">${number(selected.gp)}</span></div>
         <div class="metric"><span class="label">Roster</span><span class="value">${detail.players.length}</span></div>
         <div class="metric"><span class="label">Goalies</span><span class="value">${detail.goalies.length}</span></div>
+      </div>
+      <div class="next-game-card team-next-game">
+        ${
+          nextTeamGame
+            ? renderNextGameCard(nextTeamGame, selected.name, { scheduleHref: teamScheduleHref })
+            : renderNoNextGameCard(selected.name, { scheduleHref: teamScheduleHref })
+        }
       </div>
       <section>
         <h3>Skaters</h3>
@@ -1721,7 +1801,7 @@ function bindEvents() {
     const scheduleMode = event.target.closest("[data-schedule-mode]");
     if (scheduleMode) {
       state.scheduleMode = scheduleMode.dataset.scheduleMode;
-      $$("#scheduleMode button").forEach((button) => button.classList.toggle("is-active", button === scheduleMode));
+      syncScheduleModeButtons();
       renderSchedule();
       updateRoute();
       return;
