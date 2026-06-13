@@ -616,7 +616,7 @@ function renderTable(rows, columns, options = {}) {
             (row) => `
               <tr>
                 ${columns
-                  .map(([key], index) => `<td class="${index > 2 ? "number" : ""}">${key === "name" ? `<button class="team-button" data-player-name="${escapeAttr(row[key])}" data-player-team-id="${escapeAttr(row.team_id)}" type="button">${number(row[key])}</button>` : number(row[key])}</td>`)
+                  .map(([key], index) => `<td class="${index > 2 ? "number" : ""}">${renderTableCell(row, key)}</td>`)
                   .join("")}
               </tr>
             `
@@ -625,6 +625,38 @@ function renderTable(rows, columns, options = {}) {
       </tbody>
     </table>
   `;
+}
+
+function renderTableCell(row, key) {
+  if (key === "name") {
+    return `<button class="team-button" data-player-name="${escapeAttr(row[key])}" data-player-team-id="${escapeAttr(row.team_id)}" type="button">${escapeAttr(number(row[key]))}</button>`;
+  }
+  if (key === "team") {
+    const href = teamRouteUrl(row);
+    if (href) return `<a class="text-link team-link" href="${escapeAttr(href)}">${escapeAttr(number(row[key]))}</a>`;
+  }
+  return escapeAttr(number(row[key]));
+}
+
+function teamRouteUrl(row) {
+  if (!row?.team) return "";
+  const divisions = state.standings?.divisions || [];
+  const division = divisions.find((entry) => entry.id === row.division_id) || divisions.find((entry) => entry.name === row.division);
+  const teamPool = division?.teams?.length ? division.teams : state.teams;
+  const team =
+    teamPool.find((entry) => entry.id === row.team_id) ||
+    teamPool.find((entry) => entry.name === row.team) ||
+    state.teams.find((entry) => entry.id === row.team_id) ||
+    state.teams.find((entry) => entry.name === row.team);
+  const params = new URLSearchParams();
+  const existing = new URLSearchParams(window.location.search);
+  if (existing.get("data") === "static") params.set("data", "static");
+  params.set("view", "teams");
+  if (currentSeasonParam() !== "current") params.set("season", currentSeasonParam());
+  if (division) params.set("division", divisionSlug(division));
+  else if (row.division) params.set("division", slugify(row.division));
+  params.set("team", team ? teamSlug(team) : teamSlug(row.team));
+  return `${window.location.pathname}?${params.toString()}`;
 }
 
 function renderTableHeader(key, label, index, options = {}) {
