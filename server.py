@@ -31,6 +31,7 @@ HISTORY_START_YEAR = 2015
 GAME_CENTER_PATH = "/get_game_center"
 GAME_CENTER_BOOTSTRAP_URL = urljoin(BASE_URL, "oss-scoresheet")
 GAME_CENTER_SCHEMA_VERSION = 2
+GAME_CENTER_CONFIG_ERROR_TTL_SECONDS = 5 * 60
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "static"
 
@@ -95,6 +96,16 @@ def is_supported_season(season: dict[str, Any]) -> bool:
         return True
     year = season_year(str(season.get("name", "")))
     return year is None or year >= HISTORY_START_YEAR
+
+
+def api_payload_error(endpoint: str, payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return f"TimeToScore API {endpoint} returned {type(payload).__name__}, expected object"
+    status = clean_text(str(payload.get("status", ""))).casefold()
+    if payload.get("success") is False or status in {"error", "failed"} or payload.get("error"):
+        detail = payload.get("error") or payload.get("message") or payload.get("errors") or payload
+        return f"TimeToScore API {endpoint} returned an error: {detail}"
+    return None
 
 
 @dataclass
@@ -212,6 +223,8 @@ class TimetoscoreClient:
         self._warming: set[str] = set()
         self._game_center_config: dict[str, str] | None = None
         self._game_center_config_error: str | None = None
+        self._game_center_config_error_at = 0.0
+        self._api_lock = RLock()
         self._api_cookiejar = http.cookiejar.CookieJar()
         self._api_opener = build_opener(HTTPCookieProcessor(self._api_cookiejar))
         self._api_proxy_session: str | None = None
@@ -275,30 +288,31 @@ class TimetoscoreClient:
         return self._cache_set(url, body)
 
     def api_bootstrap(self) -> str:
-        if self._api_proxy_session:
-            return self._api_proxy_session
-        url = urljoin(BASE_URL, f"{API_BOOTSTRAP_PATH}?{urlencode({'league': LEAGUE_ID})}")
-        req = Request(url, headers={"User-Agent": "OaklandHockeyStats/0.1"})
-        try:
-            with self._api_opener.open(req, timeout=12) as response:
-                html = response.read().decode("utf-8", errors="replace")
-        except URLError as exc:
-            reason = getattr(exc, "reason", None)
-            if isinstance(reason, ssl.SSLCertVerificationError):
-                self._api_cookiejar = http.cookiejar.CookieJar()
-                self._api_opener = build_opener(
-                    HTTPCookieProcessor(self._api_cookiejar),
-                    HTTPSHandler(context=ssl._create_unverified_context()),
-                )
+        with self._api_lock:
+            if self._api_proxy_session:
+                return self._api_proxy_session
+            url = urljoin(BASE_URL, f"{API_BOOTSTRAP_PATH}?{urlencode({'league': LEAGUE_ID})}")
+            req = Request(url, headers={"User-Agent": "OaklandHockeyStats/0.1"})
+            try:
                 with self._api_opener.open(req, timeout=12) as response:
                     html = response.read().decode("utf-8", errors="replace")
-            else:
-                raise RuntimeError(f"Could not bootstrap TimeToScore API proxy from {url}: {exc}") from exc
-        match = re.search(r'data-proxy-session="([^"]+)"', html)
-        if not match:
-            raise RuntimeError("Could not read TimeToScore API proxy session")
-        self._api_proxy_session = match.group(1)
-        return self._api_proxy_session
+            except URLError as exc:
+                reason = getattr(exc, "reason", None)
+                if isinstance(reason, ssl.SSLCertVerificationError):
+                    self._api_cookiejar = http.cookiejar.CookieJar()
+                    self._api_opener = build_opener(
+                        HTTPCookieProcessor(self._api_cookiejar),
+                        HTTPSHandler(context=ssl._create_unverified_context()),
+                    )
+                    with self._api_opener.open(req, timeout=12) as response:
+                        html = response.read().decode("utf-8", errors="replace")
+                else:
+                    raise RuntimeError(f"Could not bootstrap TimeToScore API proxy from {url}: {exc}") from exc
+            match = re.search(r'data-proxy-session="([^"]+)"', html)
+            if not match:
+                raise RuntimeError("Could not read TimeToScore API proxy session")
+            self._api_proxy_session = match.group(1)
+            return self._api_proxy_session
 
     def api(self, endpoint: str, params: dict[str, str | int | None], retry: bool = True) -> dict[str, Any]:
         clean_params = {
@@ -332,6 +346,9 @@ class TimetoscoreClient:
             raise RuntimeError(f"TimeToScore API {endpoint} returned HTTP {exc.code}") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"Could not fetch TimeToScore API {endpoint}: {exc}") from exc
+        error = api_payload_error(endpoint, payload)
+        if error:
+            raise RuntimeError(error)
         return self._cache_set(cache_key, payload)
 
     def league_metadata(self) -> dict[str, Any]:
@@ -347,8 +364,10 @@ class TimetoscoreClient:
     def game_center_config(self, game_id: str) -> dict[str, str]:
         if self._game_center_config:
             return self._game_center_config
-        if self._game_center_config_error:
+        if self._game_center_config_error and time.time() - self._game_center_config_error_at < GAME_CENTER_CONFIG_ERROR_TTL_SECONDS:
             raise RuntimeError(self._game_center_config_error)
+        self._game_center_config_error = None
+        self._game_center_config_error_at = 0.0
         html = self.fetch_url(f"{GAME_CENTER_BOOTSTRAP_URL}?{urlencode({'game_id': game_id, 'mode': 'display'})}")
         config: dict[str, str] = {}
         for key in ("username", "secret", "api_url", "league_id"):
@@ -358,6 +377,7 @@ class TimetoscoreClient:
         missing = {"username", "secret", "api_url", "league_id"} - set(config)
         if missing:
             self._game_center_config_error = f"Could not read TimeToScore game-center config: missing {', '.join(sorted(missing))}"
+            self._game_center_config_error_at = time.time()
             raise RuntimeError(self._game_center_config_error)
         self._game_center_config = config
         return config
@@ -440,6 +460,7 @@ class TimetoscoreClient:
         if cached is not None:
             return cached
 
+        api_error: RuntimeError | None = None
         try:
             payload = self.api(
                 "get_standings",
@@ -447,8 +468,8 @@ class TimetoscoreClient:
             )
             normalized = normalize_api_standings(payload, season, self.seasons())
             return self._cache_set(cache_key, normalized)
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            api_error = exc
 
         tables = self.tables("display-stats.php", {"league": LEAGUE_ID, "season": season})
         divisions: list[dict[str, Any]] = []
@@ -508,17 +529,18 @@ class TimetoscoreClient:
 
         self.add_standings_goal_totals(divisions, resolved_season or season)
 
-        return self._cache_set(
-            cache_key,
-            {
-                "league_id": LEAGUE_ID,
-                "requested_season": season,
-                "season": resolved_season,
-                "history_start_year": HISTORY_START_YEAR,
-                "seasons": self.seasons(),
-                "divisions": divisions,
-            },
-        )
+        if api_error and not divisions:
+            raise RuntimeError(f"Could not fetch standings for season {season}: {api_error}") from api_error
+
+        result = {
+            "league_id": LEAGUE_ID,
+            "requested_season": season,
+            "season": resolved_season,
+            "history_start_year": HISTORY_START_YEAR,
+            "seasons": self.seasons(),
+            "divisions": divisions,
+        }
+        return self._cache_set(cache_key, result)
 
     def add_standings_goal_totals(self, divisions: list[dict[str, Any]], season: str) -> None:
         teams_by_id: dict[str, dict[str, Any]] = {}
@@ -577,6 +599,7 @@ class TimetoscoreClient:
         )
 
     def division_stats(self, season: str, level: str, conf: str = "0", stat_class: str = "1") -> dict[str, Any]:
+        api_error: RuntimeError | None = None
         try:
             resolved_season = self.current_season_id() if str(season) == "0" else str(season)
             standings = self.standings(resolved_season)
@@ -606,8 +629,8 @@ class TimetoscoreClient:
             result["players"].sort(key=lambda row: (row.get("points") or 0, row.get("goals") or 0), reverse=True)
             result["goalies"].sort(key=lambda row: (row.get("save_pct") or 0, row.get("gp") or 0), reverse=True)
             return result
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            api_error = exc
 
         tables = self.tables(
             "display-league-stats",
@@ -621,6 +644,8 @@ class TimetoscoreClient:
             elif title == "Goalie Stats":
                 result["goalies"] = parse_records(table, context={"level": level, "conf": conf})
         result["players"] = remove_goalie_overlap_from_skaters(result["players"], result["goalies"])
+        if api_error and not result["players"] and not result["goalies"]:
+            raise RuntimeError(f"Could not fetch division stats for season {season}, level {level}, conf {conf}: {api_error}") from api_error
         return result
 
     def season_player_index(self, season: dict[str, str], stat_class: str = "1") -> dict[str, Any]:
@@ -946,6 +971,8 @@ def normalize_api_player_team_rows(player: dict[str, Any]) -> list[dict[str, Any
 
 def normalize_api_skaters(payload: dict[str, Any], context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     context = context or {}
+    if "skaters" not in payload:
+        raise RuntimeError("TimeToScore API get_skaters returned no skaters key")
     skaters = payload.get("skaters") if isinstance(payload.get("skaters"), list) else []
     rows: list[dict[str, Any]] = []
     for player in skaters:
@@ -986,6 +1013,8 @@ def normalize_api_skaters(payload: dict[str, Any], context: dict[str, Any] | Non
 
 def normalize_api_goalies(payload: dict[str, Any], context: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     context = context or {}
+    if "goalies" not in payload:
+        raise RuntimeError("TimeToScore API get_goalies returned no goalies key")
     goalies = payload.get("goalies") if isinstance(payload.get("goalies"), list) else []
     rows: list[dict[str, Any]] = []
     for player in goalies:
@@ -1032,6 +1061,8 @@ def format_api_schedule_date(value: Any) -> str:
 
 
 def normalize_api_schedule(payload: dict[str, Any], season: str, divisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if "games" not in payload:
+        raise RuntimeError("TimeToScore API get_schedule_lite returned no games key")
     games = payload.get("games") if isinstance(payload.get("games"), list) else []
     team_context_by_id: dict[str, dict[str, Any]] = {}
     team_context_by_name: dict[str, dict[str, Any]] = {}
