@@ -1274,6 +1274,18 @@ function renderPlayerProfileInto(panel, profile, splitSelectId, titleId = "") {
         </select>
       </label>
     </header>
+    ${
+      titleId
+        ? `
+          <div class="share-profile-panel" data-share-player-panel hidden>
+            <label>
+              <span>Share Link</span>
+              <input data-share-player-url type="text" readonly value="${escapeAttr(playerShareUrl(profile))}" />
+            </label>
+          </div>
+        `
+        : ""
+    }
     <div class="profile-scope-controls">
       <label>
         <span>Division</span>
@@ -1347,21 +1359,52 @@ async function copyPlayerShareLink(button) {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(url);
-    } else {
-      const textarea = document.createElement("textarea");
-      textarea.value = url;
-      textarea.setAttribute("readonly", "");
-      textarea.style.position = "fixed";
-      textarea.style.left = "-9999px";
-      document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand("copy");
-      textarea.remove();
+    } else if (!copyWithTemporaryTextarea(url)) {
+      throw new Error("Clipboard fallback failed");
     }
     flashShareButton(button, "Copied");
   } catch (error) {
-    flashShareButton(button, "Copy failed");
+    const copied = copyWithTemporaryTextarea(url);
+    if (copied) {
+      flashShareButton(button, "Copied");
+      return;
+    }
+    showPlayerShareFallback(button, url);
   }
+}
+
+function copyWithTemporaryTextarea(url) {
+  const textarea = document.createElement("textarea");
+  textarea.value = url;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch (error) {
+    copied = false;
+  }
+  textarea.remove();
+  return copied;
+}
+
+function showPlayerShareFallback(button, url) {
+  const panel = $("#playerDrawerBody")?.querySelector("[data-share-player-panel]");
+  const input = panel?.querySelector("[data-share-player-url]");
+  if (!panel || !input) {
+    flashShareButton(button, "Link ready");
+    return;
+  }
+  input.value = url;
+  panel.hidden = false;
+  input.focus();
+  input.select();
+  flashShareButton(button, "Link ready");
 }
 
 function flashShareButton(button, label) {

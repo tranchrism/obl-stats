@@ -421,6 +421,33 @@ main {
   outline: 0;
 }
 
+.share-profile-panel {
+  margin: -4px 0 18px;
+}
+
+.share-profile-panel label {
+  display: grid;
+  gap: 7px;
+}
+
+.share-profile-panel span {
+  color: var(--faint);
+  font-size: 0.7rem;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.share-profile-panel input {
+  background: rgba(255, 253, 247, 0.74);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 0.88rem;
+  min-height: 40px;
+  padding: 0 12px;
+  width: 100%;
+}
+
 .profile-scope-controls {
   display: grid;
   gap: 10px;
