@@ -4,6 +4,11 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      full_rebuild:
+        description: "Run a full historical rebuild instead of the incremental current-season refresh."
+        required: false
+        default: "false"
   schedule:
     # GitHub cron is UTC-only and can start late, so run once nightly without a local-hour gate.
     - cron: "0 9 * * *"
@@ -44,7 +49,13 @@ jobs:
             export-cache-
 
       - name: Export static site
-        run: python export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 75
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.full_rebuild }}" == "true" ]]; then
+            python export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 25
+          else
+            python export_static.py --out dist --incremental-current --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 20
+          fi
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

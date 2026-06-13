@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,33 @@ def copy_static_assets(out_dir: Path) -> None:
         shutil.rmtree(out_dir)
     shutil.copytree(STATIC_ROOT, out_dir)
     (out_dir / ".nojekyll").write_text("", encoding="utf-8")
+
+
+def copy_cached_data(cache_dir: Path | None, data_dir: Path) -> bool:
+    if not cache_dir:
+        return False
+    cache_data_dir = cache_dir / "data"
+    if not cache_data_dir.exists():
+        return False
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    shutil.copytree(cache_data_dir, data_dir)
+    return True
+
+
+def save_data_cache(data_dir: Path, cache_dir: Path | None) -> None:
+    if not cache_dir or not data_dir.exists():
+        return
+    cache_data_dir = cache_dir / "data"
+    if cache_data_dir.exists():
+        shutil.rmtree(cache_data_dir)
+    shutil.copytree(data_dir, cache_data_dir)
+
+
+def count_json_files(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for entry in path.rglob("*.json") if entry.is_file())
 
 
 def add_profile_row(profiles: dict[str, dict[str, Any]], row: dict[str, Any], row_type: str, split: str) -> None:
@@ -76,6 +104,91 @@ def write_profile_files(players_dir: Path, profiles: dict[str, dict[str, Any]]) 
             write_json(players_dir / split / f"{slug}.json", payload)
             count += 1
     return count
+
+
+def recompute_profile_payload(payload: dict[str, Any], split: str) -> dict[str, Any]:
+    skater_rows = payload.get("skater_seasons", []) if isinstance(payload.get("skater_seasons"), list) else []
+    goalie_rows = payload.get("goalie_seasons", []) if isinstance(payload.get("goalie_seasons"), list) else []
+    available_splits = payload.get("available_splits") if isinstance(payload.get("available_splits"), list) else [split]
+    if split not in available_splits:
+        available_splits.append(split)
+    payload["season_type"] = split
+    payload["available_splits"] = available_splits
+    payload["skater_seasons"] = skater_rows
+    payload["goalie_seasons"] = goalie_rows
+    payload["skater_career"] = server.career_totals(skater_rows, mode="skater")
+    payload["goalie_career"] = server.career_totals(goalie_rows, mode="goalie")
+    return payload
+
+
+def strip_profile_seasons(players_dir: Path, season_ids: set[str], splits: set[str]) -> int:
+    stripped = 0
+    if not season_ids:
+        return stripped
+    for split in splits:
+        split_dir = players_dir / split
+        if not split_dir.exists():
+            continue
+        for path in split_dir.glob("*.json"):
+            payload = read_json(path)
+            if not isinstance(payload, dict):
+                continue
+            changed = False
+            for key in ("skater_seasons", "goalie_seasons"):
+                rows = payload.get(key, [])
+                if not isinstance(rows, list):
+                    rows = []
+                filtered = [row for row in rows if str(row.get("season_id", "")) not in season_ids]
+                if len(filtered) != len(rows):
+                    changed = True
+                payload[key] = filtered
+            if not changed:
+                continue
+            stripped += 1
+            if not payload["skater_seasons"] and not payload["goalie_seasons"]:
+                path.unlink(missing_ok=True)
+            else:
+                write_json(path, recompute_profile_payload(payload, split))
+    return stripped
+
+
+def merge_profile_files(players_dir: Path, profiles: dict[str, dict[str, Any]]) -> int:
+    for slug, profile in sorted(profiles.items()):
+        for split in profile["available_splits"]:
+            split_payload = profile["splits"].get(split, {})
+            path = players_dir / split / f"{slug}.json"
+            existing = read_json(path)
+            if not isinstance(existing, dict):
+                existing = {
+                    "name": profile["name"],
+                    "history_start_year": profile["history_start_year"],
+                    "identity_keys": profile["identity_keys"],
+                    "available_splits": [],
+                    "skater_seasons": [],
+                    "goalie_seasons": [],
+                }
+            available_splits = existing.get("available_splits") if isinstance(existing.get("available_splits"), list) else []
+            for available_split in profile["available_splits"]:
+                if available_split not in available_splits:
+                    available_splits.append(available_split)
+            identity_keys = sorted(set(existing.get("identity_keys", [])) | set(profile.get("identity_keys", [])))
+            payload = {
+                **existing,
+                "name": existing.get("name") or profile["name"],
+                "history_start_year": existing.get("history_start_year") or profile["history_start_year"],
+                "identity_keys": identity_keys,
+                "available_splits": available_splits,
+                "skater_seasons": [
+                    *(existing.get("skater_seasons", []) if isinstance(existing.get("skater_seasons"), list) else []),
+                    *split_payload.get("skater_seasons", []),
+                ],
+                "goalie_seasons": [
+                    *(existing.get("goalie_seasons", []) if isinstance(existing.get("goalie_seasons"), list) else []),
+                    *split_payload.get("goalie_seasons", []),
+                ],
+            }
+            write_json(path, recompute_profile_payload(payload, split))
+    return count_json_files(players_dir)
 
 
 def team_matches_game(team: dict[str, Any], game: dict[str, Any]) -> bool:
@@ -173,6 +286,7 @@ def export_game_centers(
     limit: int = 0,
 ) -> dict[str, int]:
     exported = 0
+    attempted = 0
     fetched = 0
     reused = 0
     failed = 0
@@ -210,7 +324,8 @@ def export_game_centers(
                     payload = None
             if payload is not None:
                 reused += 1
-            elif not limit or fetched < limit:
+            elif not limit or attempted < limit:
+                attempted += 1
                 try:
                     payload = client.game_center(game_id, season_id, game)
                     fetched += 1
@@ -234,6 +349,7 @@ def export_game_centers(
 
     return {
         "game_center_files": exported,
+        "game_centers_attempted": attempted,
         "game_centers_fetched": fetched,
         "game_centers_reused": reused,
         "game_centers_failed": failed,
@@ -244,16 +360,22 @@ def export_game_centers(
 def export_site(
     out_dir: Path,
     current_only: bool = False,
+    incremental_current: bool = False,
     include_playoffs: bool = True,
     include_profiles: bool = True,
     include_game_centers: bool = False,
     cache_dir: Path | None = None,
     game_center_limit: int = 0,
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     copy_static_assets(out_dir)
 
     client = server.TimetoscoreClient()
     data_dir = out_dir / "data"
+    cached_data_restored = copy_cached_data(cache_dir, data_dir) if incremental_current else False
+    if incremental_current and not cached_data_restored:
+        incremental_current = False
+
     standings_dir = data_dir / "standings"
     division_stats_dir = data_dir / "division-stats"
     schedule_dir = data_dir / "schedule"
@@ -262,7 +384,7 @@ def export_site(
 
     standings_by_request: dict[str, dict[str, Any]] = {}
     requested_season_ids = ["0"]
-    if not current_only:
+    if not current_only and not incremental_current:
         requested_season_ids.extend(season["id"] for season in client.seasons() if season["id"] != "0")
 
     all_names: set[str] = set()
@@ -275,7 +397,7 @@ def export_site(
 
     for requested_season in requested_season_ids:
         standings = client.standings(requested_season)
-        if current_only:
+        if current_only and not incremental_current:
             standings = {
                 **standings,
                 "seasons": [
@@ -313,6 +435,13 @@ def export_site(
                     team_key = (division_season, str(team["id"]))
                     team_context[team_key] = team
                     team_payloads.setdefault(team_key, new_team_payload(division_season, team))
+
+    if incremental_current:
+        for season_id in exported_schedule_ids:
+            shutil.rmtree(teams_dir / season_id, ignore_errors=True)
+            if division_stats_dir.exists():
+                for path in division_stats_dir.glob(f"{season_id}-*.json"):
+                    path.unlink(missing_ok=True)
 
     schedules: dict[str, dict[str, Any]] = {}
     for season_id in exported_schedule_ids:
@@ -391,26 +520,42 @@ def export_site(
         payload["players"] = server.remove_goalie_overlap_from_skaters(payload.get("players", []), payload.get("goalies", []))
         write_json(teams_dir / season_id / f"{team_id}.json", payload)
 
-    profile_files = write_profile_files(players_dir, profiles) if include_profiles else 0
+    profile_seasons_stripped = 0
+    if include_profiles and incremental_current:
+        profile_seasons_stripped = strip_profile_seasons(
+            players_dir,
+            {str(season_id) for season_id in exported_schedule_ids},
+            {"regular", "playoffs"} if include_playoffs else {"regular"},
+        )
+        profile_files = merge_profile_files(players_dir, profiles)
+    else:
+        profile_files = write_profile_files(players_dir, profiles) if include_profiles else 0
 
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "export_mode": "incremental-current" if incremental_current else "current-only" if current_only else "full",
+        "cached_data_restored": cached_data_restored,
         "history_start_year": server.HISTORY_START_YEAR,
         "league_id": server.LEAGUE_ID,
         "requested_seasons": requested_season_ids,
-        "standings_files": len(standings_by_request),
-        "division_stat_files": len(exported_division_keys),
-        "schedule_files": len(exported_schedule_ids) + len(schedule_aliases),
+        "standings_files": count_json_files(standings_dir),
+        "division_stat_files": count_json_files(division_stats_dir),
+        "schedule_files": count_json_files(schedule_dir),
         "schedule_aliases": schedule_aliases,
-        "team_files": len(team_payloads),
+        "team_files": count_json_files(teams_dir),
         "player_profile_names": len(all_names),
         "player_profile_files": profile_files,
+        "profile_seasons_stripped": profile_seasons_stripped,
         "include_playoffs": include_playoffs,
         "include_profiles": include_profiles,
         "include_game_centers": include_game_centers,
+        "duration_seconds": round(time.perf_counter() - started_at, 2),
+        "total_game_center_files": count_json_files(data_dir / "game-centers"),
         **game_center_manifest,
     }
     write_json(data_dir / "manifest.json", manifest)
+    if cache_dir and (incremental_current or not current_only):
+        save_data_cache(data_dir, cache_dir)
     return manifest
 
 
@@ -418,6 +563,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Export the hockey stats app as a static GitHub Pages site.")
     parser.add_argument("--out", default="dist", type=Path, help="Output directory for the static site.")
     parser.add_argument("--current-only", action="store_true", help="Export only the current season shell data.")
+    parser.add_argument("--incremental-current", action="store_true", help="Restore cached static data and refresh only the current season.")
     parser.add_argument("--skip-playoffs", action="store_true", help="Skip playoff player profile JSON.")
     parser.add_argument("--skip-profiles", action="store_true", help="Skip player profile JSON. Useful for quick build smoke tests.")
     parser.add_argument("--include-game-centers", action="store_true", help="Export cached game-center box scores for final games.")
@@ -428,6 +574,7 @@ def main() -> None:
     manifest = export_site(
         args.out,
         current_only=args.current_only,
+        incremental_current=args.incremental_current,
         include_playoffs=not args.skip_playoffs,
         include_profiles=not args.skip_profiles,
         include_game_centers=args.include_game_centers,
