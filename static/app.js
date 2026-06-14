@@ -1,5 +1,6 @@
 const DEFAULT_HISTORY_START_YEAR = 2015;
 const PLAYER_LANDING_LIMIT = 10;
+const DEFAULT_SCHEDULE_MODE = "upcoming";
 const LOCAL_API_HOSTS = new Set(["", "127.0.0.1", "localhost"]);
 const USE_STATIC_DATA = new URLSearchParams(window.location.search).get("data") === "static" || !LOCAL_API_HOSTS.has(window.location.hostname);
 const ROUTE_VIEWS = new Set(["standings", "leaders", "schedule", "teams", "players"]);
@@ -17,7 +18,7 @@ const state = {
   leaderMode: "players",
   leaderDivisionFilter: "all",
   leaderSortDirection: "desc",
-  scheduleMode: "all",
+  scheduleMode: DEFAULT_SCHEDULE_MODE,
   scheduleDivisionFilter: "all",
   scheduleTeamFilter: "all",
   selectedTeam: null,
@@ -191,7 +192,7 @@ function applyRouteFromUrl() {
   };
   state.leaderMode = routeValue(params.get("leader"), ["players", "goalies"], "players");
   state.leaderSortDirection = routeValue(params.get("dir"), ["asc", "desc"], "desc");
-  state.scheduleMode = routeValue(params.get("mode"), ["all", "final", "upcoming"], "all");
+  state.scheduleMode = routeValue(params.get("mode"), ["all", "final", "upcoming"], DEFAULT_SCHEDULE_MODE);
   state.playerSeasonType = routeValue(params.get("playerSplit"), ["regular", "playoffs"], "regular");
 }
 
@@ -308,7 +309,7 @@ function currentRouteUrl(options = {}) {
     if (state.leaderSortDirection !== "desc") params.set("dir", state.leaderSortDirection);
   }
   if (state.view === "schedule") {
-    if (state.scheduleMode !== "all") params.set("mode", state.scheduleMode);
+    if (state.scheduleMode !== DEFAULT_SCHEDULE_MODE) params.set("mode", state.scheduleMode);
     if (state.scheduleDivisionFilter !== "all") params.set("division", slugify(state.scheduleDivisionFilter));
     if (state.scheduleTeamFilter !== "all") params.set("team", teamSlug(state.scheduleTeamFilter));
   }
