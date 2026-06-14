@@ -226,14 +226,14 @@ function resolveRouteControls() {
     return;
   }
   if (state.view === "schedule") {
-    const scheduleDivision = route.division
-      ? Array.from(new Set(state.schedule.map((game) => game.level).filter(Boolean))).find((division) => slugMatches(division, route.division) || division === route.division)
-      : null;
-    state.scheduleDivisionFilter = scheduleDivision || "all";
     const scheduleTeam = route.scheduleTeam || route.team;
-    state.scheduleTeamFilter = scheduleTeam
-      ? scheduleTeamsForDivision(state.scheduleDivisionFilter).find((team) => slugMatches(team, scheduleTeam) || team === scheduleTeam) || "all"
-      : "all";
+    const routeScheduleTeam = scheduleTeam ? findAssignedTeamForScheduleRoute(scheduleTeam) : null;
+    const assignedScheduleDivision = routeScheduleTeam ? assignedDivisionNameForTeam(routeScheduleTeam) : "";
+    const scheduleDivision = route.division
+      ? scheduleDivisionNames().find((division) => slugMatches(division, route.division) || division === route.division)
+      : null;
+    state.scheduleDivisionFilter = assignedScheduleDivision || scheduleDivision || "all";
+    state.scheduleTeamFilter = routeScheduleTeam?.name || (scheduleTeam ? scheduleTeamsForDivision(state.scheduleDivisionFilter).find((team) => slugMatches(team, scheduleTeam) || team === scheduleTeam) || "all" : "all");
     syncScheduleModeButtons();
     renderScheduleFilters();
     renderSchedule();
@@ -802,7 +802,7 @@ function scheduleRouteUrlForTeam(team) {
 }
 
 function renderScheduleFilters() {
-  const divisions = Array.from(new Set(state.schedule.map((game) => game.level).filter(Boolean))).sort((a, b) => compareTextAsc(a, b));
+  const divisions = scheduleDivisionNames();
   if (state.scheduleDivisionFilter !== "all" && !divisions.includes(state.scheduleDivisionFilter)) {
     state.scheduleDivisionFilter = "all";
   }
@@ -828,6 +828,25 @@ function syncScheduleModeButtons() {
 }
 
 function scheduleTeamsForDivision(division) {
+  const assignedTeams =
+    division === "all"
+      ? state.teams
+      : (state.standings?.divisions || []).find((entry) => entry.name === division)?.teams || [];
+  if (assignedTeams.length) {
+    return Array.from(new Set(assignedTeams.map((team) => team.name).filter(Boolean))).sort((a, b) => compareTextAsc(a, b));
+  }
+  return scheduleParticipantTeams(division);
+}
+
+function scheduleDivisionNames() {
+  const standingsDivisions = (state.standings?.divisions || []).map((division) => division.name).filter(Boolean);
+  if (standingsDivisions.length) {
+    return Array.from(new Set(standingsDivisions)).sort((a, b) => compareTextAsc(a, b));
+  }
+  return Array.from(new Set(state.schedule.map((game) => game.level).filter(Boolean))).sort((a, b) => compareTextAsc(a, b));
+}
+
+function scheduleParticipantTeams(division) {
   return Array.from(
     new Set(
       state.schedule
@@ -836,6 +855,17 @@ function scheduleTeamsForDivision(division) {
         .filter(Boolean)
     )
   ).sort((a, b) => compareTextAsc(a, b));
+}
+
+function findAssignedTeamForScheduleRoute(value) {
+  return (
+    (state.teams || []).find((team) => team.id === value || team.name === value || slugMatches(teamSlug(team), value)) ||
+    null
+  );
+}
+
+function assignedDivisionNameForTeam(team) {
+  return (state.standings?.divisions || []).find((division) => division.teams.some((entry) => entry.id === team.id || entry.name === team.name))?.name || "";
 }
 
 function renderGame(game) {
