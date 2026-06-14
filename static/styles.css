@@ -1144,13 +1144,13 @@ th.number .table-sort {
   background: color-mix(in srgb, var(--mint) 12%, transparent);
   border-bottom: 1px solid var(--line);
   display: grid;
-  gap: 10px;
-  grid-template-columns: minmax(110px, 0.8fr) repeat(2, minmax(140px, 1fr)) auto;
+  gap: 12px;
+  grid-template-columns: minmax(110px, 0.65fr) repeat(2, minmax(180px, 1fr)) auto;
   padding: 10px 4px;
 }
 
 .shot-summary p,
-.shot-summary small {
+.shot-summary > small {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 800;
@@ -1159,23 +1159,39 @@ th.number .table-sort {
   text-transform: uppercase;
 }
 
-.shot-summary div {
-  align-items: baseline;
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
+.shot-summary .shot-team {
+  align-items: start;
+  display: grid;
+  gap: 2px 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  justify-content: start;
 }
 
-.shot-summary span {
+.shot-summary .shot-team span {
   color: var(--ink);
   font-size: 0.86rem;
   font-weight: 760;
+  grid-column: 2;
 }
 
-.shot-summary b {
+.shot-summary .shot-team b {
   color: var(--teal);
   font-size: 1.12rem;
   font-variant-numeric: tabular-nums;
+  grid-row: 1 / span 2;
+  line-height: 1;
+  min-width: 2ch;
+  text-align: right;
+}
+
+.shot-summary .shot-team small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  grid-column: 2;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-transform: none;
 }
 
 .box-score-period header {
@@ -1515,11 +1531,11 @@ th.number .table-sort {
   }
 
   .shot-summary {
-    grid-template-columns: minmax(104px, 0.75fr) repeat(2, minmax(120px, 1fr));
-    min-width: 430px;
+    grid-template-columns: minmax(104px, 0.7fr) repeat(2, minmax(170px, 1fr));
+    min-width: 540px;
   }
 
-  .shot-summary small {
+  .shot-summary > small {
     display: none;
   }
 

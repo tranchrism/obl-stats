@@ -32,7 +32,7 @@ API_MIN_INTERVAL_SECONDS = 0.25
 API_RATE_LIMIT_RETRY_SECONDS = 12
 GAME_CENTER_PATH = "/get_game_center"
 GAME_CENTER_BOOTSTRAP_URL = urljoin(BASE_URL, "oss-scoresheet")
-GAME_CENTER_SCHEMA_VERSION = 2
+GAME_CENTER_SCHEMA_VERSION = 3
 GAME_CENTER_CONFIG_ERROR_TTL_SECONDS = 5 * 60
 ROOT = Path(__file__).resolve().parent
 STATIC_ROOT = ROOT / "static"
@@ -1404,6 +1404,65 @@ def normalize_assist(event: dict[str, Any], name_key: str, total_key: str) -> di
     }
 
 
+def normalize_goalie_event(event: dict[str, Any]) -> dict[str, str] | None:
+    name = display_person_name(str(first_value(event, ["goalie_player_name", "goalie_name"])))
+    if not name:
+        return None
+    return {
+        "name": name,
+        "id": clean_text(str(first_value(event, ["goalie_player_id", "goalie_id", "goalie"]))),
+    }
+
+
+def normalize_game_goalies(events: list[dict[str, Any]], game: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    goalies: dict[str, list[dict[str, str]]] = {"away": [], "home": []}
+    seen: dict[str, set[str]] = {"away": set(), "home": set()}
+    goalie_changes: list[dict[str, str]] = []
+    away_id = str(game.get("away_team_id", ""))
+    home_id = str(game.get("home_team_id", ""))
+
+    def add(side: str, goalie: dict[str, str] | None) -> None:
+        if not goalie:
+            return
+        key = goalie.get("id") or goalie.get("name", "").casefold()
+        if not key or key in seen[side]:
+            return
+        seen[side].add(key)
+        goalies[side].append(goalie)
+
+    for event in events:
+        event_type = clean_text(str(first_value(event, ["type", "event_type", "event_type_name"]))).lower().replace(" ", "_")
+        goalie = normalize_goalie_event(event)
+        if event_type == "goalie_change" and goalie:
+            goalie_changes.append(goalie)
+
+        # For save events, TimeToScore's team id is the shooting team, not the
+        # goalie's team. Assign the goalie to the opposite side of that shot.
+        team_id = str(first_value(event, ["team", "team_id"]))
+        if team_id and team_id == away_id:
+            add("home", goalie)
+        elif team_id and team_id == home_id:
+            add("away", goalie)
+
+    unique_changes: list[dict[str, str]] = []
+    unique_keys: set[str] = set()
+    for goalie in goalie_changes:
+        key = goalie.get("id") or goalie.get("name", "").casefold()
+        if not key or key in unique_keys:
+            continue
+        unique_keys.add(key)
+        unique_changes.append(goalie)
+
+    # Older/incomplete games may only include opening goalie-change events, which
+    # TimeToScore emits home then away.
+    if not goalies["away"] and unique_changes:
+        add("away", unique_changes[1] if len(unique_changes) > 1 else unique_changes[0])
+    if not goalies["home"] and len(unique_changes) > 1:
+        add("home", unique_changes[0])
+
+    return goalies
+
+
 def normalize_game_center(payload: dict[str, Any], game_id: str, season: str, game: dict[str, Any]) -> dict[str, Any]:
     live = payload.get("live") if isinstance(payload.get("live"), dict) else {}
     events = flatten_game_center_events(live.get("events"))
@@ -1480,6 +1539,7 @@ def normalize_game_center(payload: dict[str, Any], game_id: str, season: str, ga
             "away": normalize_shot_summary(away_shots),
             "home": normalize_shot_summary(home_shots),
         },
+        "goalies": normalize_game_goalies(events, game),
         "scoring": group_events_by_period(goals),
         "penalties": group_events_by_period(penalties),
         "has_events": bool(goals or penalties),

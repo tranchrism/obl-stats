@@ -54,7 +54,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.full_rebuild }}" == "true" ]]; then
             python export_static.py --out dist --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 25
           else
-            python export_static.py --out dist --incremental-current --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 20
+            python export_static.py --out dist --incremental-current --skip-playoffs --include-game-centers --cache-dir .export-cache --game-center-limit 0
           fi
 
       - name: Configure Pages

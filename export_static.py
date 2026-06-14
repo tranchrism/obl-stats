@@ -317,10 +317,12 @@ def export_game_centers(
             payload = cached_payload
         else:
             payload = None
+            stale_payload = None
             cache_path = cache_game_center_dir / f"{game_id}.json" if cache_game_center_dir else None
             if cache_path:
                 payload = read_json(cache_path)
                 if payload and payload.get("schema_version") != server.GAME_CENTER_SCHEMA_VERSION:
+                    stale_payload = payload
                     payload = None
             if payload is not None:
                 reused += 1
@@ -333,7 +335,9 @@ def export_game_centers(
                         write_json(cache_path, payload)
                 except Exception as exc:
                     failed += 1
-                    payload = {"game_id": game_id, "season": season_id, "error": str(exc), "has_events": False}
+                    payload = stale_payload or {"game_id": game_id, "season": season_id, "error": str(exc), "has_events": False}
+            else:
+                payload = stale_payload
             seen[game_id] = payload
 
         if not payload or payload.get("error"):

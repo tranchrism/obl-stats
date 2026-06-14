@@ -928,14 +928,28 @@ function renderShotSummary(payload, game, shots) {
   if (shots.away?.total == null && shots.home?.total == null) return "";
   const awayName = payload.away_team || game.away_team;
   const homeName = payload.home_team || game.home_team;
+  const awayGoalies = goalieNames(payload.goalies?.away);
+  const homeGoalies = goalieNames(payload.goalies?.home);
   return `
     <div class="shot-summary">
       <p>Shots on goal</p>
-      <div><span>${escapeAttr(awayName)}</span><b>${number(shots.away?.total)}</b></div>
-      <div><span>${escapeAttr(homeName)}</span><b>${number(shots.home?.total)}</b></div>
+      <div class="shot-team">
+        <b>${number(shots.away?.total)}</b>
+        <span>${escapeAttr(awayName)}</span>
+        ${awayGoalies ? `<small>Goalie: ${escapeAttr(awayGoalies)}</small>` : ""}
+      </div>
+      <div class="shot-team">
+        <b>${number(shots.home?.total)}</b>
+        <span>${escapeAttr(homeName)}</span>
+        ${homeGoalies ? `<small>Goalie: ${escapeAttr(homeGoalies)}</small>` : ""}
+      </div>
       <small>${teamAbbr(awayName)} / ${teamAbbr(homeName)}</small>
     </div>
   `;
+}
+
+function goalieNames(goalies) {
+  return Array.from(new Set((goalies || []).map((goalie) => goalie?.name).filter(Boolean))).join(", ");
 }
 
 function renderBoxScorePeriod(period, payload, game) {
