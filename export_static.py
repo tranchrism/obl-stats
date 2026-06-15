@@ -278,13 +278,93 @@ def apply_team_scoped_box_score_totals(records: list[dict[str, Any]]) -> None:
                         assist["total_scope"] = "team"
 
 
+def score_value(payload: dict[str, Any], side: str) -> int | None:
+    value = payload.get(f"{side}_score")
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def game_winning_goal(payload: dict[str, Any]) -> dict[str, str] | None:
+    """Return the scorer/team for the standard loser-final-score-plus-one GWG."""
+    away_score = score_value(payload, "away")
+    home_score = score_value(payload, "home")
+    if away_score is None or home_score is None or away_score == home_score:
+        return None
+
+    winner_side = "away" if away_score > home_score else "home"
+    winner_team = str(payload.get(f"{winner_side}_team", "")).strip()
+    winning_goal_number = min(away_score, home_score) + 1
+    if not winner_team:
+        return None
+
+    scoring = payload.get("scoring", [])
+    if not isinstance(scoring, list):
+        return None
+
+    events: list[dict[str, Any]] = []
+    for period in scoring:
+        if isinstance(period, dict) and isinstance(period.get("events"), list):
+            events.extend(event for event in period["events"] if isinstance(event, dict))
+
+    running_winner_goals = 0
+    for event in sorted(events, key=box_score_event_sort_key):
+        if server.normalize_name(str(event.get("team", ""))) != server.normalize_name(winner_team):
+            continue
+        running_winner_goals += 1
+        score = event.get("score")
+        winner_score = score.get(winner_side) if isinstance(score, dict) else None
+        if not isinstance(winner_score, int):
+            winner_score = running_winner_goals
+        if winner_score == winning_goal_number and event.get("scorer"):
+            return {
+                "season": str(payload.get("season", "")),
+                "team": winner_team,
+                "scorer": str(event["scorer"]),
+            }
+    return None
+
+
+def derived_gwg_totals(records: list[dict[str, Any]]) -> dict[tuple[str, str, str], int]:
+    totals: dict[tuple[str, str, str], int] = {}
+    for record in records:
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        winner = game_winning_goal(payload)
+        if not winner:
+            continue
+        season = winner["season"]
+        team = server.normalize_name(winner["team"])
+        for identity_key in server.name_identity_keys(winner["scorer"]):
+            key = (season, team, identity_key)
+            totals[key] = totals.get(key, 0) + 1
+    return totals
+
+
+def gwg_total_for_row(totals: dict[tuple[str, str, str], int], row: dict[str, Any]) -> int | None:
+    season = str(row.get("season_id", ""))
+    team = server.normalize_name(str(row.get("team", "")))
+    if not season or not team:
+        return None
+    matches = [
+        totals[(season, team, identity_key)]
+        for identity_key in server.name_identity_keys(str(row.get("name", "")))
+        if (season, team, identity_key) in totals
+    ]
+    return max(matches) if matches else None
+
+
 def export_game_centers(
     client: server.TimetoscoreClient,
     schedules: dict[str, dict[str, Any]],
     out_dir: Path,
     cache_dir: Path | None,
     limit: int = 0,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[tuple[str, str, str], int]]:
     exported = 0
     attempted = 0
     fetched = 0
@@ -351,7 +431,7 @@ def export_game_centers(
     for record in records:
         write_json(game_center_dir / f"{record['game_id']}.json", record["payload"])
 
-    return {
+    manifest = {
         "game_center_files": exported,
         "game_centers_attempted": attempted,
         "game_centers_fetched": fetched,
@@ -359,6 +439,7 @@ def export_game_centers(
         "game_centers_failed": failed,
         "game_centers_missing": max(len({game.get("game_id") for _, game in final_games if game.get("game_id")}) - len([game_id for game_id, payload in seen.items() if payload and not payload.get("error")]), 0),
     }
+    return manifest, derived_gwg_totals(records)
 
 
 def export_site(
@@ -451,11 +532,11 @@ def export_site(
     for season_id in exported_schedule_ids:
         schedule = client.schedule(season_id)
         schedules[season_id] = schedule
-    game_center_manifest = (
-        export_game_centers(client, schedules, data_dir, cache_dir, limit=game_center_limit)
-        if include_game_centers
-        else {"game_center_files": 0, "game_centers_fetched": 0, "game_centers_reused": 0, "game_centers_failed": 0, "game_centers_missing": 0}
-    )
+    if include_game_centers:
+        game_center_manifest, gwg_totals = export_game_centers(client, schedules, data_dir, cache_dir, limit=game_center_limit)
+    else:
+        game_center_manifest = {"game_center_files": 0, "game_centers_fetched": 0, "game_centers_reused": 0, "game_centers_failed": 0, "game_centers_missing": 0}
+        gwg_totals = {}
     for season_id, schedule in schedules.items():
         write_json(schedule_dir / f"{season_id}.json", schedule)
     for alias_id, season_id in schedule_aliases.items():
@@ -489,6 +570,9 @@ def export_site(
                 "division_id": context.get("division_id", ""),
                 "team_id": team_id,
             }
+            derived_gwg = gwg_total_for_row(gwg_totals, player_row)
+            if derived_gwg is not None:
+                player_row["gwg"] = derived_gwg
             if include_profiles:
                 add_profile_row(
                     profiles,

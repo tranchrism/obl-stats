@@ -1511,6 +1511,7 @@ function renderPlayerProfileInto(panel, profile, splitSelectId, titleId = "") {
             <div class="metric"><span class="label">Goals</span><span class="value">${number(career.goals)}</span></div>
             <div class="metric"><span class="label">Assists</span><span class="value">${number(career.assists)}</span></div>
             <div class="metric"><span class="label">Points</span><span class="value">${number(career.points)}</span></div>
+            <div class="metric"><span class="label">GWG</span><span class="value">${number(career.gwg)}</span></div>
           `
       }
     </div>
@@ -1698,6 +1699,7 @@ function careerTotals(rows, mode) {
     plus_minus: sumProfileStat(rows, "plus_minus"),
     pims: sumProfileStat(rows, "pims"),
     hat: sumProfileStat(rows, "hat"),
+    gwg: sumProfileStat(rows, "gwg"),
     points_per_game: gp ? Number((points / gp).toFixed(2)) : null,
   };
 }
@@ -1767,7 +1769,7 @@ function renderPlayerSeasonTable(rows, career) {
     <table>
       <thead>
         <tr>
-          <th>Season</th><th>Team</th><th>Division</th><th class="number">GP</th><th class="number">G</th><th class="number">A</th><th class="number">P</th><th class="number">+/-</th><th class="number">PIM</th><th class="number">Hat</th><th class="number">Pts/G</th>
+          <th>Season</th><th>Team</th><th>Division</th><th class="number">GP</th><th class="number">G</th><th class="number">A</th><th class="number">P</th><th class="number">+/-</th><th class="number">PIM</th><th class="number">GWG</th><th class="number">Hat</th><th class="number">Pts/G</th>
         </tr>
       </thead>
       <tbody>
@@ -1784,6 +1786,7 @@ function renderPlayerSeasonTable(rows, career) {
                 <td class="number">${number(row.points)}</td>
                 <td class="number">${number(row.plus_minus)}</td>
                 <td class="number">${number(row.pims)}</td>
+                <td class="number">${number(row.gwg)}</td>
                 <td class="number">${number(row.hat)}</td>
                 <td class="number">${number(row.points_per_game)}</td>
               </tr>

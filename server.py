@@ -1281,6 +1281,7 @@ def career_totals(rows: list[dict[str, Any]], mode: str) -> dict[str, Any]:
         "plus_minus": sum_numeric(rows, "plus_minus"),
         "pims": sum_numeric(rows, "pims"),
         "hat": sum_numeric(rows, "hat"),
+        "gwg": sum_numeric(rows, "gwg"),
         "points_per_game": round(points / gp, 2) if gp else None,
     }
 
