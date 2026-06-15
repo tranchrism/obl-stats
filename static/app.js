@@ -916,6 +916,7 @@ function renderBoxScore(game) {
       </div>
       ${renderShotSummary(payload, game, shots)}
       ${scoring.length ? sortBoxScorePeriods(scoring).map((period) => renderBoxScorePeriod(period, payload, game)).join("") : `<div class="empty">No scoring events available.</div>`}
+      ${renderSavesSummary(payload, game, shots)}
       <div class="box-score-header penalties-header">
         <h4>Penalties</h4>
       </div>
@@ -928,28 +929,94 @@ function renderShotSummary(payload, game, shots) {
   if (shots.away?.total == null && shots.home?.total == null) return "";
   const awayName = payload.away_team || game.away_team;
   const homeName = payload.home_team || game.home_team;
-  const awayGoalies = goalieNames(payload.goalies?.away);
-  const homeGoalies = goalieNames(payload.goalies?.home);
   return `
     <div class="shot-summary">
       <p>Shots on goal</p>
       <div class="shot-team">
         <b>${number(shots.away?.total)}</b>
         <span>${escapeAttr(awayName)}</span>
-        ${awayGoalies ? `<small>Goalie: ${escapeAttr(awayGoalies)}</small>` : ""}
       </div>
       <div class="shot-team">
         <b>${number(shots.home?.total)}</b>
         <span>${escapeAttr(homeName)}</span>
-        ${homeGoalies ? `<small>Goalie: ${escapeAttr(homeGoalies)}</small>` : ""}
       </div>
       <small>${teamAbbr(awayName)} / ${teamAbbr(homeName)}</small>
     </div>
   `;
 }
 
+function renderSavesSummary(payload, game, shots) {
+  const rows = saveSummaryRows(payload, game, shots);
+  if (!rows.length) return "";
+  return `
+    <div class="box-score-header saves-header">
+      <h4>Saves</h4>
+    </div>
+    <div class="saves-summary">
+      ${rows.map(renderSaveSummaryRow).join("")}
+    </div>
+  `;
+}
+
+function saveSummaryRows(payload, game, shots) {
+  const awayName = payload.away_team || game.away_team;
+  const homeName = payload.home_team || game.home_team;
+  const awayGoals = numericValue(payload.away_goals ?? game.away_goals);
+  const homeGoals = numericValue(payload.home_goals ?? game.home_goals);
+  return [
+    buildSaveSummaryRow(payload.goalies?.away, awayName, shots.home?.total, homeGoals),
+    buildSaveSummaryRow(payload.goalies?.home, homeName, shots.away?.total, awayGoals),
+  ].filter(Boolean);
+}
+
+function buildSaveSummaryRow(goalies, teamName, shotsAgainstValue, goalsAgainstValue) {
+  const goalieLabel = goalieNames(goalies);
+  const shotsAgainst = numericValue(shotsAgainstValue);
+  const goalsAgainst = numericValue(goalsAgainstValue);
+  if (!goalieLabel || shotsAgainst == null || goalsAgainst == null) return null;
+  const saves = Math.max(shotsAgainst - goalsAgainst, 0);
+  return {
+    goalieLabel,
+    teamName,
+    saves,
+    shotsAgainst,
+    savePct: shotsAgainst ? saves / shotsAgainst : null,
+    gaa: goalsAgainst,
+  };
+}
+
+function renderSaveSummaryRow(row) {
+  return `
+    <div class="save-row">
+      <div>
+        <b>${escapeAttr(row.goalieLabel)}</b>
+        <span>${escapeAttr(row.teamName)}</span>
+      </div>
+      <strong>${number(row.saves)}/${number(row.shotsAgainst)}</strong>
+      <span>${formatSavePct(row.savePct)} SV%</span>
+      <span>${formatGaa(row.gaa)} GAA</span>
+    </div>
+  `;
+}
+
 function goalieNames(goalies) {
   return Array.from(new Set((goalies || []).map((goalie) => goalie?.name).filter(Boolean))).join(", ");
+}
+
+function numericValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatSavePct(value) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
+  return value.toFixed(3).replace(/^0/, "");
+}
+
+function formatGaa(value) {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
+  return value.toFixed(2);
 }
 
 function renderBoxScorePeriod(period, payload, game) {

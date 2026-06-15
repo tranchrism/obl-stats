@@ -1139,6 +1139,11 @@ th.number .table-sort {
   margin-top: 14px;
 }
 
+.saves-header {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+}
+
 .shot-summary {
   align-items: center;
   background: color-mix(in srgb, var(--mint) 12%, transparent);
@@ -1178,7 +1183,6 @@ th.number .table-sort {
   color: var(--teal);
   font-size: 1.12rem;
   font-variant-numeric: tabular-nums;
-  grid-row: 1 / span 2;
   line-height: 1;
   min-width: 2ch;
   text-align: right;
@@ -1192,6 +1196,51 @@ th.number .table-sort {
   letter-spacing: 0;
   line-height: 1.25;
   text-transform: none;
+}
+
+.saves-summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.save-row {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(220px, 1fr) 72px 82px 82px;
+  padding: 10px 4px;
+}
+
+.save-row b,
+.save-row span {
+  display: block;
+}
+
+.save-row b {
+  color: var(--ink);
+  font-size: 0.94rem;
+}
+
+.save-row div span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.save-row strong,
+.save-row > span {
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 780;
+  justify-self: end;
+}
+
+.save-row strong {
+  color: var(--teal);
+}
+
+.save-row > span {
+  color: var(--muted);
 }
 
 .box-score-period header {
@@ -1537,6 +1586,11 @@ th.number .table-sort {
 
   .shot-summary > small {
     display: none;
+  }
+
+  .save-row {
+    grid-template-columns: minmax(150px, 1fr) repeat(3, max-content);
+    min-width: 540px;
   }
 
   .penalty-period header,
