@@ -10,8 +10,9 @@ on:
         required: false
         default: "false"
   schedule:
-    # GitHub cron is UTC-only and can start late; run twice daily about 12 hours apart.
-    - cron: "0 9,21 * * *"
+    # GitHub uses UTC and can delay jobs scheduled at the top of an hour.
+    # Refresh twice daily, 12 hours apart, at a quieter minute.
+    - cron: "17 9,21 * * *"
 
 permissions:
   contents: read
